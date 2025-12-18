@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Firebase SDK v8 -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+  <title>Promise Voucher Network</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <!-- ===== AUTHENTICATION SCREEN ===== -->
+  <div id="authScreen" class="auth-screen">
+    <div class="auth-container">
+      <h1>Promise Voucher Network</h1>
+
+      <!-- Login/Signup Tabs -->
+      <div class="auth-tabs">
+        <button id="loginTab" class="auth-tab active" data-mode="login">Login</button>
+        <button id="signupTab" class="auth-tab" data-mode="signup">Sign Up</button>
+      </div>
+
+      <!-- Login Form -->
+      <form id="loginForm" class="auth-form active">
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <input type="email" id="loginEmail" class="form-control" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input type="password" id="loginPassword" class="form-control" required>
+        </div>
+        <button type="submit" class="btn btn--primary btn--full-width">Login</button>
+        <div id="loginError" class="auth-error"></div>
+      </form>
+
+      <!-- Signup Form -->
+      <form id="signupForm" class="auth-form">
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <input type="email" id="signupEmail" class="form-control" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password (min 6 characters)</label>
+          <input type="password" id="signupPassword" class="form-control" required>
+        </div>
+        <button type="submit" class="btn btn--primary btn--full-width">Sign Up</button>
+        <div id="signupError" class="auth-error"></div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ===== MAIN APP CONTAINER ===== -->
+  <div id="appContainer" class="app-container hidden">
+    <div class="container">
+      <!-- Header -->
+      <header class="app-header">
+        <h1>Promise Voucher Network</h1>
+        <div class="agent-info">
+          <div class="agent-status" id="currentAgentKey">user@example.com</div>
+          <button id="logoutBtn" class="btn btn--outline btn--sm">Logout</button>
+        </div>
+      </header>
+
+      <!-- Navigation Tabs -->
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-tab="dashboard">Dashboard</button>
+        <button class="nav-tab" data-tab="create">Create Promise</button>
+        <button class="nav-tab" data-tab="my-promises">My Promises</button>
+        <button class="nav-tab" data-tab="transfer">Transfer Promise</button>
+        <button class="nav-tab" data-tab="address-book">Address Book</button>
+      </nav>
+
+      <!-- Tab Content -->
+      <main class="tab-content">
+        <!-- Dashboard Tab -->
+        <div class="tab-pane active" id="dashboard">
+          <div class="dashboard-grid">
+            <div class="stat-card">
+              <h3>Total Promises</h3>
+              <span class="stat-number" id="totalPromises">0</span>
+            </div>
+            <div class="stat-card">
+              <h3>Active Promises</h3>
+              <span class="stat-number" id="activePromises">0</span>
+            </div>
+            <div class="stat-card">
+              <h3>Redeemed Promises</h3>
+              <span class="stat-number" id="redeemedPromises">0</span>
+            </div>
+            <div class="stat-card">
+              <h3>Network Agents</h3>
+              <span class="stat-number" id="networkAgents">0</span>
+            </div>
+          </div>
+
+          <div class="dashboard-section">
+            <h2>Recent Activity</h2>
+            <div class="activity-list" id="recentActivity">
+              <!-- Activity items will be populated here -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Create Promise Tab -->
+        <div class="tab-pane" id="create">
+          <div class="card">
+            <div class="card__header">
+              <h2>Create New Promise</h2>
+            </div>
+            <div class="card__body">
+              <form id="createPromiseForm">
+                <div class="form-group">
+                  <label class="form-label" for="promiseContent">Promise Content</label>
+                  <textarea class="form-control" id="promiseContent" rows="3" placeholder="Enter what you promise to do..." required></textarea>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="promiseReceiver">Receiver</label>
+                  <select class="form-control" id="promiseReceiver" required>
+                    <option value="">Select a contact...</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="promiseExpiration">Expiration Date (Optional)</label>
+                  <input type="datetime-local" class="form-control" id="promiseExpiration">
+                </div>
+
+                <div class="form-group">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="promiseLock">
+                    Lock this promise (cannot be transferred)
+                  </label>
+                </div>
+
+                <button type="submit" class="btn btn--primary btn--full-width">Create Promise</button>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- My Promises Tab -->
+        <div class="tab-pane" id="my-promises">
+          <div class="promises-section">
+            <h2>Promises I've Sent</h2>
+            <div class="promises-list" id="sentPromises">
+              <!-- Sent promises will be populated here -->
+            </div>
+          </div>
+
+          <div class="promises-section">
+            <h2>Promises I've Received</h2>
+            <div class="promises-list" id="receivedPromises">
+              <!-- Received promises will be populated here -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Transfer Promise Tab -->
+        <div class="tab-pane" id="transfer">
+          <div class="card">
+            <div class="card__header">
+              <h2>Transfer Promise</h2>
+            </div>
+            <div class="card__body">
+              <form id="transferPromiseForm">
+                <div class="form-group">
+                  <label class="form-label" for="transferPromiseSelect">Select Promise to Transfer</label>
+                  <select class="form-control" id="transferPromiseSelect" required>
+                    <option value="">Select a promise...</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label" for="transferReceiver">New Receiver</label>
+                  <select class="form-control" id="transferReceiver" required>
+                    <option value="">Select a contact...</option>
+                  </select>
+                </div>
+
+                <button type="submit" class="btn btn--primary btn--full-width">Transfer Promise</button>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- Address Book Tab -->
+        <div class="tab-pane" id="address-book">
+          <div class="card">
+            <div class="card__header">
+              <h2>Address Book</h2>
+            </div>
+            <div class="card__body">
+              <form id="addContactForm">
+                <div class="form-group">
+                  <label class="form-label" for="contactName">Email Address</label>
+                  <input type="email" class="form-control" id="contactName" placeholder="Enter contact email" required>
+                </div>
+
+                <button type="submit" class="btn btn--secondary btn--full-width">Add Contact</button>
+              </form>
+            </div>
+          </div>
+
+          <div class="contacts-section">
+            <h3>Contacts</h3>
+            <div class="contacts-list" id="contactsList">
+              <!-- Contacts will be populated here -->
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- Toast Notifications -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-spinner"></div>
+    <p>Loading...</p>
+  </div>
+
+  <!-- Firebase Configuration & Initialization -->
+  <script>
+    // Your web app's Firebase configuration
+    var firebaseConfig = {
+      apiKey: "AIzaSyBlz5MKpgcBfjjDa44V8TIhz09l0RsPaYE",
+      authDomain: "promise-network-mvp.firebaseapp.com",
+      projectId: "promise-network-mvp",
+      storageBucket: "promise-network-mvp.firebasestorage.app",
+      messagingSenderId: "508110234402",
+      appId: "1:508110234402:web:769227fa0be87d543c7b7b",
+      measurementId: "G-YQR0TT1S94"
+    };
+
+    // Initialize Firebase (v8 style)
+    firebase.initializeApp(firebaseConfig);
+
+    // We'll use these later in app.js
+    var auth = firebase.auth();
+    var db = firebase.firestore();
+
+    // Debug: Check if services are ready
+    console.log('Auth service:', auth);
+    console.log('Firestore service:', db);
+  </script>
+
+  <!-- Your app logic -->
+  <script src="app.js"></script>
+</body>
+
+</html>
