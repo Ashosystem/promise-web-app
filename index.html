@@ -9,6 +9,10 @@
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
 
+  <!-- TweetNaCl for encryption (public key cryptography) -->
+  <script src="https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tweetnacl-util@0.15.1/nacl-util.min.js"></script>
+
   <title>Promise Voucher Network</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -252,6 +256,8 @@
     console.log('Auth service:', auth);
     console.log('Firestore service:', db);
   </script>
+
+
 
   <!-- Your app logic -->
   <script src="app.js"></script>

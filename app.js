@@ -1,4 +1,66 @@
-// Firebase Promise App - Multi-User Implementation with Real-time Sync
+// ===== ENCRYPTION UTILITY =====
+class PromiseEncryption {
+  /**
+   * Generate a keypair for the user
+   * Store the secret key in browser (not sent to Firebase)
+   */
+  static generateKeyPair() {
+    return nacl.box.keyPair();
+  }
+
+  /**
+   * Encrypt a message with a public key
+   * Sender encrypts with recipient's public key
+   */
+  static encrypt(message, recipientPublicKey) {
+    const messageUint8 = nacl.util.decodeUTF8(message);
+    const publicKeyUint8 = nacl.util.decodeBase64(recipientPublicKey);
+
+    // Generate ephemeral keypair for this encryption
+    const ephemeralKeyPair = nacl.box.keyPair();
+
+    // Encrypt
+    const nonce = nacl.randomBytes(nacl.box.nonceLength);
+    const encrypted = nacl.box(
+      messageUint8,
+      nonce,
+      publicKeyUint8,
+      ephemeralKeyPair.secretKey
+    );
+
+    // Return: ephemeral public key + nonce + ciphertext (all base64)
+    return {
+      ephemeralPublicKey: nacl.util.encodeBase64(ephemeralKeyPair.publicKey),
+      nonce: nacl.util.encodeBase64(nonce),
+      ciphertext: nacl.util.encodeBase64(encrypted)
+    };
+  }
+
+  /**
+   * Decrypt with your secret key
+   * Receiver decrypts with their own secret key
+   */
+  static decrypt(encryptedData, secretKey) {
+    const ephemeralPublicKey = nacl.util.decodeBase64(encryptedData.ephemeralPublicKey);
+    const nonce = nacl.util.decodeBase64(encryptedData.nonce);
+    const ciphertext = nacl.util.decodeBase64(encryptedData.ciphertext);
+
+    const decrypted = nacl.box.open(
+      ciphertext,
+      nonce,
+      ephemeralPublicKey,
+      secretKey
+    );
+
+    if (!decrypted) {
+      throw new Error('Decryption failed - invalid key or corrupted data');
+    }
+
+    return nacl.util.encodeUTF8(decrypted);
+  }
+}
+
+// ===== FIREBASE PROMISE APP =====
 class FirebasePromiseApp {
   constructor() {
     this.currentUser = null;
@@ -7,69 +69,74 @@ class FirebasePromiseApp {
     this.contacts = new Map();
     this.activities = [];
 
-    // Firebase references (initialized in index.html)
-    this.auth = firebase.auth();
-    console.log('Firebase initialized:', { auth: firebase.auth, db: firebase.firestore });
-    this.db = firebase.firestore();
+    // Encryption
+    this.myKeyPair = null;
+    this.contactPublicKeys = new Map();
 
+    this.eventListenersInitialized = false;
+
+    // Firebase references
+    this.auth = firebase.auth();
+    this.db = firebase.firestore();
 
     // Real-time listeners
     this.unsubscribers = [];
 
+    console.log('Firebase initialized');
     this.initializeAuth();
   }
 
   // ===== AUTHENTICATION =====
-  initializeAuth() {
-    // Check if user already logged in
-    this.auth.onAuthStateChanged(async (user) => {
-      if (user) {
-        this.currentUser = user;
-        await this.loadUserProfile();
-        this.showApp();
-        this.setupRealtimeListeners();
-      } else {
-        this.showAuthScreen();
+    initializeAuth() {
+      // Setup auth form listeners ONCE, not repeatedly
+      const loginForm = document.getElementById('loginForm');
+      const signupForm = document.getElementById('signupForm');
+      const loginTab = document.getElementById('loginTab');
+      const signupTab = document.getElementById('signupTab');
+
+      if (loginForm && !loginForm.dataset.initialized) {
+        loginForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          this.login();
+        });
+        loginForm.dataset.initialized = 'true';
       }
-    });
 
-    // Auth form listeners
-    document.getElementById('loginForm').addEventListener('submit', (e) => {
-      e.preventDefault();
-      this.login();
-    });
+      if (signupForm && !signupForm.dataset.initialized) {
+        signupForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          this.signup();
+        });
+        signupForm.dataset.initialized = 'true';
+      }
 
-    document.getElementById('signupForm').addEventListener('submit', (e) => {
-      e.preventDefault();
-      this.signup();
-    });
+      if (loginTab && !loginTab.dataset.initialized) {
+        loginTab.addEventListener('click', () => {
+          this.switchAuthMode('login');
+        });
+        loginTab.dataset.initialized = 'true';
+      }
 
-    // Auth tab switching
-    document.getElementById('loginTab').addEventListener('click', () => {
-      this.switchAuthMode('login');
-    });
+      if (signupTab && !signupTab.dataset.initialized) {
+        signupTab.addEventListener('click', () => {
+          this.switchAuthMode('signup');
+        });
+        signupTab.dataset.initialized = 'true';
+      }
 
-    document.getElementById('signupTab').addEventListener('click', () => {
-      this.switchAuthMode('signup');
-    });
-  }
+      // Auth state monitoring
+        this.auth.onAuthStateChanged(async (user) => {
+          if (user) {
+            this.currentUser = user;
+            await this.loadUserProfile(); // This now handles loadEncryptionKeys internally
+            this.showApp();
+            this.setupRealtimeListeners();
+          } else {
+            this.showAuthScreen();
+          }
+        });
 
-  switchAuthMode(mode) {
-    document.querySelectorAll('.auth-tab').forEach(tab => {
-      tab.classList.remove('active');
-    });
-    document.querySelector(`[data-mode="${mode}"]`).classList.add('active');
-
-    document.querySelectorAll('.auth-form').forEach(form => {
-      form.classList.remove('active');
-    });
-
-    if (mode === 'login') {
-      document.getElementById('loginForm').classList.add('active');
-    } else {
-      document.getElementById('signupForm').classList.add('active');
     }
-  }
 
   async login() {
     const email = document.getElementById('loginEmail').value;
@@ -83,127 +150,234 @@ class FirebasePromiseApp {
     }
   }
 
-async signup() {
-  console.log('=== SIGNUP CALLED ===');
-  const email = document.getElementById('signupEmail').value;
-  const password = document.getElementById('signupPassword').value;
-  console.log('Email:', email, 'Password length:', password.length);
+  async signup() {
+    console.log('=== SIGNUP CALLED ===');
+    const email = document.getElementById('signupEmail').value;
+    const password = document.getElementById('signupPassword').value;
 
-  if (password.length < 6) {
-    console.log('Password too short');
-    document.getElementById('signupError').textContent = 'Password must be at least 6 characters';
-    return;
+    if (password.length < 6) {
+      document.getElementById('signupError').textContent = 'Password must be at least 6 characters';
+      return;
+    }
+
+    try {
+      console.log('Creating user with Firebase Auth...');
+      const userCred = await this.auth.createUserWithEmailAndPassword(email, password);
+      console.log('User created:', userCred.user.uid);
+
+      // Generate encryption keypair
+      this.myKeyPair = PromiseEncryption.generateKeyPair();
+      const publicKeyBase64 = nacl.util.encodeBase64(this.myKeyPair.publicKey);
+      const secretKeyBase64 = nacl.util.encodeBase64(this.myKeyPair.secretKey);
+
+      console.log('Creating Firestore user doc with public key...');
+      await this.db.collection('users').doc(userCred.user.uid).set({
+        email: email,
+        publicKey: publicKeyBase64, // STORED in Firebase (safe - it's public)
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+
+      // Store secret key in browser
+      this.storeSecretKeyLocally(secretKeyBase64);
+
+      console.log('User doc created successfully');
+      // onAuthStateChanged will handle the rest
+    } catch (error) {
+      console.error('SIGNUP ERROR:', error);
+      document.getElementById('signupError').textContent = error.message;
+    }
   }
-
-  try {
-    console.log('Creating user with Firebase Auth...');
-    const userCred = await this.auth.createUserWithEmailAndPassword(email, password);
-    console.log('User created:', userCred.user.uid);
-
-    console.log('Creating Firestore user doc...');
-    await this.db.collection('users').doc(userCred.user.uid).set({
-      email: email,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    });
-    console.log('User doc created successfully');
-    // onAuthStateChanged will handle the rest
-  } catch (error) {
-    console.error('SIGNUP ERROR:', error);
-    console.error('Error code:', error.code);
-    console.error('Error message:', error.message);
-    document.getElementById('signupError').textContent = error.message;
-  }
-}
-
 
   async logout() {
     // Clean up listeners
     this.unsubscribers.forEach(unsub => unsub());
     this.unsubscribers = [];
-
     await this.auth.signOut();
   }
 
-  // ===== USER PROFILE =====
-  async loadUserProfile() {
-    const userDocRef = this.db.collection('users').doc(this.currentUser.uid);
+  switchAuthMode(mode) {
+    const loginForm = document.getElementById('loginForm');
+    const signupForm = document.getElementById('signupForm');
+    const loginTab = document.getElementById('loginTab');
+    const signupTab = document.getElementById('signupTab');
 
-    try {
-      const doc = await userDocRef.get();
-      if (doc.exists) {
-        this.currentUserDoc = doc.data();
-      } else {
-        // Create profile if doesn't exist
-        await userDocRef.set({
-          email: this.currentUser.email,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        });
-        this.currentUserDoc = (await userDocRef.get()).data();
-      }
-    } catch (error) {
-      console.error('Error loading user profile:', error);
+    if (mode === 'login') {
+        loginForm.style.display = 'block';
+        signupForm.style.display = 'none';
+        loginTab.classList.add('active');
+        signupTab.classList.remove('active');
+        document.getElementById('loginError').textContent = '';
+    } else if (mode === 'signup') {
+        loginForm.style.display = 'none';
+        signupForm.style.display = 'block';
+        loginTab.classList.remove('active');
+        signupTab.classList.add('active');
+        document.getElementById('signupError').textContent = '';
     }
   }
 
+
+  // ===== ENCRYPTION HELPERS =====
+  async loadEncryptionKeys() {
+    try {
+      // Load user doc to get their public key
+      const userDocRef = this.db.collection('users').doc(this.currentUser.uid);
+      const doc = await userDocRef.get();
+
+      if (!doc.exists) return;
+
+      // Get secret key from local storage
+      const storedSecretKey = localStorage.getItem(`prometheusSecretKey_${this.currentUser.uid}`);
+
+      if (storedSecretKey) {
+        this.myKeyPair = {
+          publicKey: nacl.util.decodeBase64(doc.data().publicKey),
+          secretKey: nacl.util.decodeBase64(storedSecretKey)
+        };
+      } else {
+        console.warn('Secret key not found. User should add this device.');
+      }
+
+      console.log('Encryption keys loaded');
+    } catch (error) {
+      console.error('Error loading encryption keys:', error);
+    }
+  }
+
+  storeSecretKeyLocally(secretKeyBase64) {
+    // In production: encrypt this with the user's password using a KDF
+    // For now: stored in browser (at rest it's still safer than sending to server)
+    localStorage.setItem(`prometheusSecretKey_${this.currentUser.uid}`, secretKeyBase64);
+  }
+
+    decryptPromiseContent(promise) {
+        // ✅ ADD THIS BLOCK - If current user is the sender, show plaintext
+        if (promise.senderId === this.currentUser.uid && promise.contentPlainForSender) {
+            return promise.contentPlainForSender;
+        }
+
+        // If no encrypted content exists, try fallback to old 'content' field
+        if (!promise.contentEncrypted) {
+            return promise.content || '[No content]';
+        }
+
+        // Current user is the receiver - decrypt with their key
+        if (!this.myKeyPair || !this.myKeyPair.secretKey) {
+            return '[Encrypted - keys not loaded]';
+        }
+
+        try {
+            return PromiseEncryption.decrypt(promise.contentEncrypted, this.myKeyPair.secretKey);
+        } catch (error) {
+            console.error('Failed to decrypt promise:', error);
+            return '[Cannot decrypt - check your keys]';
+        }
+    }
+
+
+  // ===== USER PROFILE =====
+    async loadUserProfile() {
+      const userDocRef = this.db.collection('users').doc(this.currentUser.uid);
+      try {
+        const doc = await userDocRef.get();
+        if (doc.exists) {
+          this.currentUserDoc = doc.data();
+          // Migrate old accounts: add publicKey if missing
+          if (!doc.data().publicKey) {
+            this.myKeyPair = PromiseEncryption.generateKeyPair();
+            const publicKeyBase64 = nacl.util.encodeBase64(this.myKeyPair.publicKey);
+            const secretKeyBase64 = nacl.util.encodeBase64(this.myKeyPair.secretKey);
+
+            await userDocRef.update({
+              publicKey: publicKeyBase64,
+              updatedAt: new Date().toISOString()
+            });
+
+            this.storeSecretKeyLocally(secretKeyBase64);
+            this.currentUserDoc.publicKey = publicKeyBase64;
+          }
+        } else {
+          // Create profile if doesn't exist
+          this.myKeyPair = PromiseEncryption.generateKeyPair();
+          const publicKeyBase64 = nacl.util.encodeBase64(this.myKeyPair.publicKey);
+          const secretKeyBase64 = nacl.util.encodeBase64(this.myKeyPair.secretKey);
+
+          await userDocRef.set({
+            email: this.currentUser.email,
+            publicKey: publicKeyBase64,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          });
+
+          this.storeSecretKeyLocally(secretKeyBase64);
+          this.currentUserDoc = (await userDocRef.get()).data();
+        }
+        // Load encryption keys
+        await this.loadEncryptionKeys();
+      } catch (error) {
+        console.error('Error loading user profile:', error);
+      }
+    }
+
+
   // ===== REAL-TIME LISTENERS =====
-setupRealtimeListeners() {
-  console.log('Setting up real-time listeners...');
+  setupRealtimeListeners() {
+    console.log('Setting up real-time listeners...');
 
-  // Listen to my promises (where I'm sender)
-  console.log('Attaching sent promises listener...');
-  const sentPromisesUnsub = this.db.collection('promises')
-    .where('senderId', '==', this.currentUser.uid)
-    .onSnapshot((snapshot) => {
-      console.log('Sent promises snapshot received:', snapshot.size);
-      snapshot.docChanges().forEach((change) => {
-        const promiseData = { id: change.doc.id, ...change.doc.data() };
-        if (change.type === 'added' || change.type === 'modified') {
-          this.promises.set(promiseData.id, promiseData);
-        } else if (change.type === 'removed') {
-          this.promises.delete(promiseData.id);
-        }
+    // Listen to my promises (where I'm sender)
+    console.log('Attaching sent promises listener...');
+    const sentPromisesUnsub = this.db.collection('promises')
+      .where('senderId', '==', this.currentUser.uid)
+      .onSnapshot((snapshot) => {
+        console.log('Sent promises snapshot received:', snapshot.size);
+        snapshot.docChanges().forEach((change) => {
+          const promiseData = { id: change.doc.id, ...change.doc.data() };
+          if (change.type === 'added' || change.type === 'modified') {
+            this.promises.set(promiseData.id, promiseData);
+          } else if (change.type === 'removed') {
+            this.promises.delete(promiseData.id);
+          }
+        });
+        this.updateUI();
       });
-      this.updateUI();
-    });
-  this.unsubscribers.push(sentPromisesUnsub);
+    this.unsubscribers.push(sentPromisesUnsub);
 
-  // Also listen to promises where I'm the receiver
-  console.log('Attaching received promises listener...');
-  const receivedPromisesUnsub = this.db.collection('promises')
-    .where('receiverEmail', '==', this.currentUser.email)
-    .onSnapshot((snapshot) => {
-      console.log('Received promises snapshot received:', snapshot.size);
-      snapshot.docChanges().forEach((change) => {
-        const promiseData = { id: change.doc.id, ...change.doc.data() };
-        if (change.type === 'added' || change.type === 'modified') {
-          this.promises.set(promiseData.id, promiseData);
-        } else if (change.type === 'removed') {
-          this.promises.delete(promiseData.id);
-        }
+    // Also listen to promises where I'm the receiver
+    console.log('Attaching received promises listener...');
+    const receivedPromisesUnsub = this.db.collection('promises')
+      .where('receiverEmail', '==', this.currentUser.email)
+      .onSnapshot((snapshot) => {
+        console.log('Received promises snapshot received:', snapshot.size);
+        snapshot.docChanges().forEach((change) => {
+          const promiseData = { id: change.doc.id, ...change.doc.data() };
+          if (change.type === 'added' || change.type === 'modified') {
+            this.promises.set(promiseData.id, promiseData);
+          } else if (change.type === 'removed') {
+            this.promises.delete(promiseData.id);
+          }
+        });
+        this.updateUI();
       });
-      this.updateUI();
-    });
-  this.unsubscribers.push(receivedPromisesUnsub);
+    this.unsubscribers.push(receivedPromisesUnsub);
 
-  // Listen to my contacts
-  console.log('Attaching contacts listener...');
-  const contactsUnsub = this.db.collection('users')
-    .doc(this.currentUser.uid)
-    .collection('contacts')
-    .onSnapshot((snapshot) => {
-      console.log('Contacts snapshot received:', snapshot.size);
-      this.contacts.clear();
-      snapshot.forEach((doc) => {
-        this.contacts.set(doc.data().email, doc.data());
+    // Listen to my contacts
+    console.log('Attaching contacts listener...');
+    const contactsUnsub = this.db.collection('users')
+      .doc(this.currentUser.uid)
+      .collection('contacts')
+      .onSnapshot((snapshot) => {
+        console.log('Contacts snapshot received:', snapshot.size);
+        this.contacts.clear();
+        snapshot.forEach((doc) => {
+          this.contacts.set(doc.data().email, doc.data());
+        });
+        this.updateUI();
       });
-      this.updateUI();
-    });
-  this.unsubscribers.push(contactsUnsub);
-  console.log('All listeners attached');
-}
+    this.unsubscribers.push(contactsUnsub);
 
+    console.log('All listeners attached');
+  }
 
   // ===== PROMISE OPERATIONS =====
   async createPromise() {
@@ -232,9 +406,20 @@ setupRealtimeListeners() {
 
       const receiverId = userQuery.docs[0].id;
 
-      // Create promise in Firestore
+      // Fetch receiver's public key
+      const receiverUserDoc = await this.db.collection('users').doc(receiverId).get();
+      const receiverPublicKey = receiverUserDoc.data().publicKey;
+
+      // Encrypt the promise content
+      const encrypted = PromiseEncryption.encrypt(content, receiverPublicKey);
+
+      // Store encrypted data
       await this.db.collection('promises').add({
-        content: content,
+        // ENCRYPTED - only receiver can read
+        contentEncrypted: encrypted,
+
+        // METADATA - not encrypted, used for queries
+        contentPlainForSender: content,  // ← ADD THIS - plaintext for sender
         senderId: this.currentUser.uid,
         senderEmail: this.currentUser.email,
         receiverId: receiverId,
@@ -249,8 +434,7 @@ setupRealtimeListeners() {
 
       document.getElementById('createPromiseForm').reset();
       this.showToast('Promise created successfully', 'success');
-      this.addActivity(`Promise "${content}" created for ${receiverEmail}`);
-
+      this.addActivity(`Promise created for ${receiverEmail}: "${content.substring(0, 50)}..."`);
     } catch (error) {
       this.showToast('Failed to create promise', 'error');
       console.error('Error:', error);
@@ -259,111 +443,135 @@ setupRealtimeListeners() {
     }
   }
 
-  async transferPromise() {
-  console.log('=== TRANSFER CALLED ===');
 
-  const promiseId = document.getElementById('transferPromiseSelect').value;
-  const newReceiverEmail = document.getElementById('transferReceiver').value;
 
-  console.log('Selected promise ID:', promiseId);
-  console.log('New receiver email:', newReceiverEmail);
+    async transferPromise() {
+        console.log('=== TRANSFER CALLED ===');
+        const promiseId = document.getElementById('transferPromiseSelect').value;
+        const newReceiverEmail = document.getElementById('transferReceiver').value;
 
-  if (!promiseId || !newReceiverEmail) {
-    console.log('Validation failed - empty fields');
-    this.showToast('Please select a promise and new receiver', 'error');
-    return;
-  }
+        console.log('Selected promise ID:', promiseId);
+        console.log('New receiver email:', newReceiverEmail);
 
-  const promise = this.promises.get(promiseId);
-  console.log('Promise object:', promise);
+        if (!promiseId || !newReceiverEmail) {
+            console.log('Validation failed - empty fields');
+            this.showToast('Please select a promise and new receiver', 'error');
+            return;
+        }
 
-  if (!promise) {
-    console.log('Promise not found in map');
-    this.showToast('Promise not found', 'error');
-    return;
-  }
+        const promise = this.promises.get(promiseId);
+        console.log('Promise object:', promise);
 
-  if (promise.locked) {
-    console.log('Promise is locked');
-    this.showToast('Cannot transfer locked promise', 'error');
-    return;
-  }
+        if (!promise) {
+            console.log('Promise not found in map');
+            this.showToast('Promise not found', 'error');
+            return;
+        }
 
-  // Check if user owns or received this promise
-    // Check if user owns or received this promise
-    if (promise.senderId !== this.currentUser.uid && promise.receiverEmail !== this.currentUser.email) {
-      console.log('User does not own or received this promise');
-      this.showToast('You can only transfer promises you own or received', 'error');
-      return;
+        if (promise.locked) {
+            console.log('Promise is locked');
+            this.showToast('Cannot transfer locked promise', 'error');
+            return;
+        }
+
+        // Check if user is the current receiver
+        if (promise.receiverEmail !== this.currentUser.email) {
+            console.log('User is not the current receiver');
+            this.showToast('Only the current receiver can transfer this promise', 'error');
+            return;
+        }
+
+        this.showLoading();
+
+        try {
+            console.log('Looking up new receiver...');
+            const userQuery = await this.db.collection('users')
+                .where('email', '==', newReceiverEmail)
+                .get();
+
+            console.log('User query result:', userQuery.size, 'docs');
+
+            if (userQuery.empty) {
+                console.log('New receiver not found');
+                this.showToast('New receiver not found', 'error');
+                this.hideLoading();
+                return;
+            }
+
+            const newReceiverId = userQuery.docs[0].id;
+            const newReceiverDoc = userQuery.docs[0].data();
+            const newReceiverPublicKey = newReceiverDoc.publicKey;
+
+            console.log('New receiver ID:', newReceiverId);
+            console.log('New receiver public key:', newReceiverPublicKey ? 'Found' : 'Missing');
+
+            // ✅ DECRYPT THE CONTENT (current receiver can read it)
+            let plainContent;
+            try {
+                plainContent = this.decryptPromiseContent(promise);
+                console.log('Decrypted content successfully:', plainContent);
+            } catch (error) {
+                console.error('Failed to decrypt content for re-encryption:', error);
+                this.showToast('Cannot transfer: unable to decrypt promise content', 'error');
+                this.hideLoading();
+                return;
+            }
+
+            // ✅ RE-ENCRYPT FOR NEW RECEIVER
+            const newEncrypted = PromiseEncryption.encrypt(plainContent, newReceiverPublicKey);
+            console.log('Re-encrypted content for new receiver');
+
+            // ✅ BUILD UPDATE OBJECT
+            const updateData = {
+                receiverId: newReceiverId,
+                receiverEmail: newReceiverEmail,
+                contentEncrypted: newEncrypted,  // Re-encrypted content
+                updatedAt: new Date().toISOString(),
+                transferHistory: firebase.firestore.FieldValue.arrayUnion({
+                    from: promise.receiverEmail,
+                    to: newReceiverEmail,
+                    timestamp: new Date().toISOString()
+                })
+            };
+
+            // ✅ REMOVE contentPlainForSender if transferring to someone else
+            if (newReceiverId !== promise.senderId) {
+                updateData.contentPlainForSender = firebase.firestore.FieldValue.delete();
+                console.log('Removing contentPlainForSender (new receiver is not the sender)');
+            }
+
+            // ✅ UPDATE PROMISE
+            console.log('Updating promise in Firestore...');
+            await this.db.collection('promises').doc(promiseId).update(updateData);
+
+            console.log('Promise transferred successfully');
+            document.getElementById('transferPromiseForm').reset();
+            this.showToast('Promise transferred successfully', 'success');
+            this.addActivity(`Promise transferred to ${newReceiverEmail}`);
+
+        } catch (error) {
+            console.error('TRANSFER ERROR:', error);
+            console.error('Error code:', error.code);
+            console.error('Error message:', error.message);
+            this.showToast('Failed to transfer promise: ' + error.message, 'error');
+        } finally {
+            this.hideLoading();
+        }
     }
 
-    // Senders cannot transfer - only current receivers can
-    if (promise.senderId === this.currentUser.uid) {
-      console.log('Sender cannot transfer promise - only current receiver can');
-      this.showToast('Only the current receiver can transfer this promise', 'error');
-      return;
-    }
 
 
-  this.showLoading();
-  try {
-    console.log('Looking up new receiver...');
-    const userQuery = await this.db.collection('users')
-      .where('email', '==', newReceiverEmail)
-      .get();
-
-    console.log('User query result:', userQuery.size, 'docs');
-
-    if (userQuery.empty) {
-      console.log('New receiver not found');
-      this.showToast('New receiver not found', 'error');
-      this.hideLoading();
-      return;
-    }
-
-    const newReceiverId = userQuery.docs[0].id;
-    console.log('New receiver ID:', newReceiverId);
-
-    // Update promise
-    console.log('Updating promise in Firestore...');
-    await this.db.collection('promises').doc(promiseId).update({
-      receiverId: newReceiverId,
-      receiverEmail: newReceiverEmail,
-      updatedAt: new Date().toISOString(),
-      transferHistory: firebase.firestore.FieldValue.arrayUnion({
-        from: promise.receiverEmail,
-        to: newReceiverEmail,
-        timestamp: new Date().toISOString()
-      })
-    });
-
-    console.log('Promise transferred successfully');
-    document.getElementById('transferPromiseForm').reset();
-    this.showToast('Promise transferred successfully', 'success');
-    this.addActivity(`Promise "${promise.content}" transferred to ${newReceiverEmail}`);
-  } catch (error) {
-    console.error('TRANSFER ERROR:', error);
-    console.error('Error code:', error.code);
-    console.error('Error message:', error.message);
-    this.showToast('Failed to transfer promise', 'error');
-  } finally {
-    this.hideLoading();
+  showTransferUI(promiseId) {
+    console.log('Showing transfer UI for promise:', promiseId);
+    // Set the promise select to this promise
+    document.getElementById('transferPromiseSelect').value = promiseId;
+    // Switch to transfer tab
+    this.switchTab('transfer');
   }
-}
-
-showTransferUI(promiseId) {
-  console.log('Showing transfer UI for promise:', promiseId);
-
-  // Set the promise select to this promise
-  document.getElementById('transferPromiseSelect').value = promiseId;
-
-  // Switch to transfer tab
-  this.switchTab('transfer');
-}
-
 
   async redeemPromise(promiseId) {
     const promise = this.promises.get(promiseId);
+
     if (!promise) {
       this.showToast('Promise not found', 'error');
       return;
@@ -383,8 +591,7 @@ showTransferUI(promiseId) {
       });
 
       this.showToast('Promise redeemed successfully', 'success');
-      this.addActivity(`Promise "${promise.content}" redeemed`);
-
+      this.addActivity(`Promise "${this.decryptPromiseContent(promise)}" redeemed`);
     } catch (error) {
       this.showToast('Failed to redeem promise', 'error');
       console.error('Error:', error);
@@ -394,50 +601,65 @@ showTransferUI(promiseId) {
   }
 
   // ===== CONTACTS =====
-  async addContact() {
-    const email = document.getElementById('contactName').value.trim();
+    async addContact() {
+        const email = document.getElementById('contactName').value.trim();
 
-    if (!email || !this.isValidEmail(email)) {
-      this.showToast('Please enter a valid email', 'error');
-      return;
+        if (!email || !this.isValidEmail(email)) {
+            this.showToast('Please enter a valid email', 'error');
+            return;
+        }
+
+        // Check if email exists in users collection
+        const userQuery = await this.db.collection('users')
+            .where('email', '==', email)
+            .get();
+
+        if (userQuery.empty) {
+            this.showToast('User not found', 'error');
+            return;
+        }
+
+        try {
+            const contactUserId = userQuery.docs[0].id;
+
+            // Check if already in contacts
+            const existingContact = await this.db.collection('users')
+                .doc(this.currentUser.uid)
+                .collection('contacts')
+                .doc(contactUserId)
+                .get();
+
+            if (existingContact.exists) {
+                this.showToast('Contact already added', 'info');
+                return;
+            }
+
+            await this.db.collection('users')
+                .doc(this.currentUser.uid)
+                .collection('contacts')
+                .doc(contactUserId)
+                .set({
+                    email: email,
+                    addedAt: new Date().toISOString()
+                });
+
+            document.getElementById('addContactForm').reset();
+
+            // ✅ Better message for self-contact
+            if (email === this.currentUser.email) {
+                this.showToast('Added yourself as contact (for self-promises)', 'success');
+            } else {
+                this.showToast('Contact added successfully', 'success');
+            }
+
+            this.addActivity(`Contact "${email}" added`);
+
+        } catch (error) {
+            this.showToast('Failed to add contact', 'error');
+            console.error('Error:', error);
+        }
     }
 
-    if (email === this.currentUser.email) {
-      this.showToast('Cannot add yourself as a contact', 'error');
-      return;
-    }
-
-    // Check if email exists in users collection
-    const userQuery = await this.db.collection('users')
-      .where('email', '==', email)
-      .get();
-
-    if (userQuery.empty) {
-      this.showToast('User not found', 'error');
-      return;
-    }
-
-    try {
-      const contactUserId = userQuery.docs[0].id;
-
-      await this.db.collection('users')
-        .doc(this.currentUser.uid)
-        .collection('contacts')
-        .doc(contactUserId)
-        .set({
-          email: email,
-          addedAt: new Date().toISOString()
-        });
-
-      document.getElementById('addContactForm').reset();
-      this.showToast('Contact added successfully', 'success');
-      this.addActivity(`Contact "${email}" added`);
-
-    } catch (error) {
-      this.showToast('Failed to add contact', 'error');
-      console.error('Error:', error);
-    }
-  }
 
   async removeContact(email) {
     try {
@@ -463,42 +685,28 @@ showTransferUI(promiseId) {
 
   // ===== UI METHODS =====
 showApp() {
-  console.log('Showing app container...');
+  console.log('Showing app container');
   document.getElementById('authScreen').classList.add('hidden');
   document.getElementById('appContainer').classList.remove('hidden');
-  // Update header with user info
   document.getElementById('currentAgentKey').textContent = this.currentUser.email;
-  console.log('Calling setupEventListeners...');
-  this.setupEventListeners();
+
+  // ✅ Setup app listeners ONCE
+  if (!this.eventListenersInitialized) {
+    console.log('Calling setupEventListeners...');
+    this.setupEventListeners();
+    this.eventListenersInitialized = true;
+  }
+
   console.log('Calling updateUI...');
   this.updateUI();
   console.log('App fully loaded');
-  this.hideLoading();  // ← ADD THIS LINE
+  this.hideLoading();
 }
 
 
   showAuthScreen() {
     document.getElementById('authScreen').classList.remove('hidden');
     document.getElementById('appContainer').classList.add('hidden');
-        // Auth form listeners
-    document.getElementById('loginForm').addEventListener('submit', (e) => {
-      e.preventDefault();
-      this.login();
-    });
-
-    document.getElementById('signupForm').addEventListener('submit', (e) => {
-      e.preventDefault();
-      this.signup();
-    });
-
-    // Auth tab switching
-    document.getElementById('loginTab').addEventListener('click', () => {
-      this.switchAuthMode('login');
-    });
-
-    document.getElementById('signupTab').addEventListener('click', () => {
-      this.switchAuthMode('signup');
-    });
   }
 
   setupEventListeners() {
@@ -553,7 +761,7 @@ showApp() {
     });
     document.getElementById(tabName)?.classList.add('active');
 
-    switch(tabName) {
+    switch (tabName) {
       case 'dashboard':
         this.updateDashboard();
         break;
@@ -583,10 +791,13 @@ showApp() {
   updateDashboard() {
     const sentPromises = Array.from(this.promises.values())
       .filter(p => p.senderId === this.currentUser.uid);
+
     const receivedPromises = Array.from(this.promises.values())
       .filter(p => p.receiverEmail === this.currentUser.email);
+
     const activeCount = Array.from(this.promises.values())
       .filter(p => p.status === 'active' || p.status === 'locked').length;
+
     const redeemedCount = Array.from(this.promises.values())
       .filter(p => p.status === 'redeemed').length;
 
@@ -597,207 +808,160 @@ showApp() {
 
     const activityContainer = document.getElementById('recentActivity');
     if (this.activities.length === 0) {
-      activityContainer.innerHTML = `
-        <div class="empty-state">
-          <h3>No recent activity</h3>
-          <p>Create or receive promises to get started</p>
-        </div>
-      `;
-    } else {
-      activityContainer.innerHTML = this.activities
-        .slice(-5)
-        .reverse()
-        .map(activity => `
-          <div class="activity-item">
-            <div>${activity.text}</div>
-            <div class="activity-time">${this.formatDate(activity.timestamp)}</div>
-          </div>
-        `).join('');
+      activityContainer.innerHTML = '<p>No recent activity</p>';
+      return;
     }
+
+    activityContainer.innerHTML = this.activities
+      .slice(-5)
+      .reverse()
+      .map(activity => `<div class="activity-item">${activity}</div>`)
+      .join('');
   }
 
   updateCreatePromiseForm() {
-    const select = document.getElementById('promiseReceiver');
-    const currentValue = select.value;
-
-    select.innerHTML = '<option value="">Select a contact...</option>';
-    this.contacts.forEach((contact) => {
-      const option = document.createElement('option');
-      option.value = contact.email;
-      option.textContent = contact.email;
-      select.appendChild(option);
-    });
-
-    select.value = currentValue;
+    const receiverSelect = document.getElementById('promiseReceiver');
+    receiverSelect.innerHTML = '<option value="">Select a contact...</option>' +
+      Array.from(this.contacts.values()).map(contact =>
+        `<option value="${contact.email}">${contact.email}</option>`
+      ).join('');
   }
 
   updateMyPromises() {
     const sentContainer = document.getElementById('sentPromises');
     const receivedContainer = document.getElementById('receivedPromises');
 
-    const sent = Array.from(this.promises.values())
+    const sentPromises = Array.from(this.promises.values())
       .filter(p => p.senderId === this.currentUser.uid);
-    const received = Array.from(this.promises.values())
+
+    const receivedPromises = Array.from(this.promises.values())
       .filter(p => p.receiverEmail === this.currentUser.email);
 
-    sentContainer.innerHTML = sent.length === 0
-      ? '<div class="empty-state"><p>No promises sent yet</p></div>'
-      : sent.map(p => this.renderPromiseCard(p, 'sent')).join('');
-
-    receivedContainer.innerHTML = received.length === 0
-      ? '<div class="empty-state"><p>No promises received yet</p></div>'
-      : received.map(p => this.renderPromiseCard(p, 'received')).join('');
-  }
-
-  renderPromiseCard(promise, type) {
-    const other = type === 'sent' ? promise.receiverEmail : promise.senderEmail;
-    const isReceiver = type === 'received';
-
-    return `
-      <div class="promise-item">
-        <div class="promise-header">
-          <div class="promise-content">${promise.content}</div>
-          <span class="promise-status ${promise.status}">${promise.status.toUpperCase()}</span>
+    // SENT PROMISES
+    sentContainer.innerHTML = sentPromises.map(promise => `
+      <div class="promise-card">
+        <div class="promise-content">
+          ${this.decryptPromiseContent(promise)}
         </div>
         <div class="promise-meta">
-          <span>${isReceiver ? 'From' : 'To'}: ${other}</span>
-          ${promise.expiresAt ? `<span>Expires: ${this.formatDate(promise.expiresAt)}</span>` : ''}
-          ${promise.locked ? '<span>🔒 Locked</span>' : ''}
+          <strong>To:</strong> ${promise.receiverEmail}<br>
+          <strong>Status:</strong> ${promise.status}<br>
+          <strong>Created:</strong> ${new Date(promise.createdAt).toLocaleDateString()}
         </div>
         <div class="promise-actions">
-          ${isReceiver && promise.status === 'active' ?
-            `<button class="btn btn--sm btn--primary" onclick="app.redeemPromise('${promise.id}')">Redeem</button>` : ''
-          }
-            ${
-              (promise.senderId === this.currentUser.uid || promise.receiverEmail === this.currentUser.email) &&
-              !promise.locked &&
-              promise.status !== 'redeemed' ?
-                `<button class="btn btn--sm btn--secondary" onclick="app.showTransferUI('${promise.id}')">Transfer</button>`
-                : ''
-            }
-
+          ${promise.locked ? '<span class="badge">🔒 Locked</span>' : ''}
         </div>
       </div>
-    `;
+    `).join('') || '<p>No promises sent yet</p>';
+
+    // RECEIVED PROMISES
+    receivedContainer.innerHTML = receivedPromises.map(promise => `
+      <div class="promise-card">
+        <div class="promise-content">
+          ${this.decryptPromiseContent(promise)}
+        </div>
+        <div class="promise-meta">
+          <strong>From:</strong> ${promise.senderEmail}<br>
+          <strong>Status:</strong> ${promise.status}<br>
+          <strong>Created:</strong> ${new Date(promise.createdAt).toLocaleDateString()}
+        </div>
+        <div class="promise-actions">
+          ${promise.status === 'active' ? `<button onclick="app.redeemPromise('${promise.id}')">Redeem</button>` : ''}
+          ${promise.status === 'active' && !promise.locked ? `<button onclick="app.showTransferUI('${promise.id}')">Transfer</button>` : ''}
+        </div>
+      </div>
+    `).join('') || '<p>No promises received yet</p>';
   }
 
   updateTransferForm() {
-    const select = document.getElementById('transferPromiseSelect');
+    const selectElement = document.getElementById('transferPromiseSelect');
+    const previewContainer = document.getElementById('transferPreview');
+
+    // Populate dropdown with available promises
+    const transferablePromises = Array.from(this.promises.values())
+      .filter(p => p.receiverEmail === this.currentUser.email && !p.locked);
+
+    selectElement.innerHTML = '<option value="">Select a promise...</option>' +
+      transferablePromises.map(p =>
+        `<option value="${p.id}">${this.decryptPromiseContent(p).substring(0, 50)}...</option>`
+      ).join('');
+
+    // Populate transfer receiver dropdown
     const receiverSelect = document.getElementById('transferReceiver');
-    const currentPromise = select.value;
-    const currentReceiver = receiverSelect.value;
+    receiverSelect.innerHTML = '<option value="">Select a contact...</option>' +
+      Array.from(this.contacts.values()).map(contact =>
+        `<option value="${contact.email}">${contact.email}</option>`
+      ).join('');
 
-  const transferable = Array.from(this.promises.values())
-  .filter(p => !p.locked && p.status !== 'redeemed' && p.receiverEmail === this.currentUser.email)
+    // Show preview when user selects a promise
+    selectElement.addEventListener('change', (e) => {
+      const promiseId = e.target.value;
+      if (!promiseId) {
+        previewContainer.innerHTML = '';
+        return;
+      }
 
-
-
-    select.innerHTML = '<option value="">Select a promise...</option>';
-    transferable.forEach(p => {
-      const option = document.createElement('option');
-      option.value = p.id;
-      option.textContent = `${p.content.substring(0, 30)}... (${p.receiverEmail})`;
-      select.appendChild(option);
+      const promise = this.promises.get(promiseId);
+      if (promise) {
+        previewContainer.innerHTML = `
+          <div class="preview-box">
+            <strong>Promise:</strong> ${this.decryptPromiseContent(promise)}<br>
+            <strong>From:</strong> ${promise.senderEmail}<br>
+            <strong>Current Receiver:</strong> ${promise.receiverEmail}
+          </div>
+        `;
+      }
     });
-
-    select.value = currentPromise;
-
-    receiverSelect.innerHTML = '<option value="">Select a contact...</option>';
-    this.contacts.forEach((contact) => {
-      const option = document.createElement('option');
-      option.value = contact.email;
-      option.textContent = contact.email;
-      receiverSelect.appendChild(option);
-    });
-
-    receiverSelect.value = currentReceiver;
   }
 
   updateAddressBook() {
-    const container = document.getElementById('contactsList');
+    const contactsContainer = document.getElementById('contactsList');
 
-    if (this.contacts.size === 0) {
-      container.innerHTML = '<div class="empty-state"><p>No contacts added yet</p></div>';
-    } else {
-      container.innerHTML = Array.from(this.contacts.values())
-        .map(contact => `
-          <div class="contact-item">
-            <div class="contact-info">
-              <div class="contact-name">${contact.email}</div>
-            </div>
-            <div class="contact-actions">
-              <button class="btn btn--sm btn--outline" onclick="app.removeContact('${contact.email}')">Remove</button>
-            </div>
-          </div>
-        `).join('');
-    }
-  }
-
-  addActivity(text) {
-    this.activities.push({
-      text: text,
-      timestamp: new Date().toISOString()
-    });
-    // Keep only last 50 activities
-    if (this.activities.length > 50) {
-      this.activities.shift();
-    }
-    this.updateDashboard();
+    contactsContainer.innerHTML = Array.from(this.contacts.values()).map(contact =>
+      `<div class="contact-card">
+        <div class="contact-email">${contact.email}</div>
+        <div class="contact-actions">
+          <button onclick="app.removeContact('${contact.email}')">Remove</button>
+        </div>
+      </div>`
+    ).join('') || '<p>No contacts added yet</p>';
   }
 
   // ===== UTILITIES =====
   isValidEmail(email) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return re.test(email);
   }
 
-  formatDate(dateString) {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return 'just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-
-    return date.toLocaleDateString();
+  addActivity(message) {
+    const timestamp = new Date().toLocaleString();
+    this.activities.push(`${timestamp}: ${message}`);
+    this.updateDashboard();
   }
 
   showToast(message, type = 'info') {
-    const container = document.getElementById('toastContainer') ||
-                     (() => {
-                       const div = document.createElement('div');
-                       div.id = 'toastContainer';
-                       div.className = 'toast-container';
-                       document.body.appendChild(div);
-                       return div;
-                     })();
-
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = message;
-    container.appendChild(toast);
-
-    setTimeout(() => toast.remove(), 4000);
+    console.log(`${type.toUpperCase()}: ${message}`);
+    // You can enhance this with a proper toast UI later
+    alert(message);
   }
 
-  showLoading() {
-    const overlay = document.getElementById('loadingOverlay');
-    if (overlay) overlay.classList.remove('hidden');
-  }
-
-  hideLoading() {
-    const overlay = document.getElementById('loadingOverlay');
-    if (overlay) overlay.classList.add('hidden');
-  }
+showLoading() {
+  const overlay = document.getElementById('loadingOverlay');
+  if (overlay) overlay.style.display = 'flex';  // Show it
 }
 
-// Initialize the app when DOM is ready
-// Initialize the app when DOM is ready
+hideLoading() {
+  const overlay = document.getElementById('loadingOverlay');
+  if (overlay) overlay.style.display = 'none';  // Hide it
+}
+}
+
+// ===== INITIALIZE APP =====
 let app;
 document.addEventListener('DOMContentLoaded', () => {
-  app = new FirebasePromiseApp();
+  try {
+    app = new FirebasePromiseApp();
+  } catch (error) {
+    console.error('Failed to initialize app:', error);
+  }
 });
