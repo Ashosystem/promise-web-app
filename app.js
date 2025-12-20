@@ -72,7 +72,7 @@ class FirebasePromiseApp {
     // Encryption
     this.myKeyPair = null;
     this.contactPublicKeys = new Map();
-
+    this.keysLoading = false;  // ← ADD THIS LINE
     this.eventListenersInitialized = false;
 
     // Firebase references
@@ -150,44 +150,49 @@ class FirebasePromiseApp {
     }
   }
 
-  async signup() {
+    async signup() {
     console.log('=== SIGNUP CALLED ===');
     const email = document.getElementById('signupEmail').value;
     const password = document.getElementById('signupPassword').value;
 
     if (password.length < 6) {
-      document.getElementById('signupError').textContent = 'Password must be at least 6 characters';
-      return;
+    document.getElementById('signupError').textContent = 'Password must be at least 6 characters';
+    return;
     }
 
     try {
-      console.log('Creating user with Firebase Auth...');
-      const userCred = await this.auth.createUserWithEmailAndPassword(email, password);
-      console.log('User created:', userCred.user.uid);
+    console.log('Creating user with Firebase Auth...');
+    const userCred = await this.auth.createUserWithEmailAndPassword(email, password);
+    console.log('User created:', userCred.user.uid);
 
-      // Generate encryption keypair
-      this.myKeyPair = PromiseEncryption.generateKeyPair();
-      const publicKeyBase64 = nacl.util.encodeBase64(this.myKeyPair.publicKey);
-      const secretKeyBase64 = nacl.util.encodeBase64(this.myKeyPair.secretKey);
+    // Generate encryption keypair
+    this.myKeyPair = PromiseEncryption.generateKeyPair();
+    const publicKeyBase64 = nacl.util.encodeBase64(this.myKeyPair.publicKey);
+    const secretKeyBase64 = nacl.util.encodeBase64(this.myKeyPair.secretKey);
 
-      console.log('Creating Firestore user doc with public key...');
-      await this.db.collection('users').doc(userCred.user.uid).set({
-        email: email,
-        publicKey: publicKeyBase64, // STORED in Firebase (safe - it's public)
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      });
+    console.log('Creating Firestore user doc with public key...');
+    await this.db.collection('users').doc(userCred.user.uid).set({
+      email: email,
+      publicKey: publicKeyBase64,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
 
-      // Store secret key in browser
-      this.storeSecretKeyLocally(secretKeyBase64);
+    // Store secret key in browser
+    this.storeSecretKeyLocally(secretKeyBase64);
 
-      console.log('User doc created successfully');
-      // onAuthStateChanged will handle the rest
+    // ← ADD THESE LINES: Store encrypted secret key in Firestore for recovery
+    console.log('Storing encrypted secret key in Firestore...');
+    await this.encryptAndStoreSecretKey(secretKeyBase64, password);
+
+    console.log('User doc created successfully');
+    // onAuthStateChanged will handle the rest
     } catch (error) {
-      console.error('SIGNUP ERROR:', error);
-      document.getElementById('signupError').textContent = error.message;
+    console.error('SIGNUP ERROR:', error);
+    document.getElementById('signupError').textContent = error.message;
     }
-  }
+    }
+
 
   async logout() {
     // Clean up listeners
@@ -219,37 +224,126 @@ class FirebasePromiseApp {
 
 
   // ===== ENCRYPTION HELPERS =====
-  async loadEncryptionKeys() {
+    async loadEncryptionKeys() {
+    this.keysLoading = true;
     try {
-      // Load user doc to get their public key
-      const userDocRef = this.db.collection('users').doc(this.currentUser.uid);
-      const doc = await userDocRef.get();
+    // Load user doc to get their public key
+    const userDocRef = this.db.collection('users').doc(this.currentUser.uid);
+    const doc = await userDocRef.get();
+    if (!doc.exists) return;
 
-      if (!doc.exists) return;
+    // Try to get secret key from local storage first
+    let storedSecretKey = localStorage.getItem(`prometheusSecretKey_${this.currentUser.uid}`);
 
-      // Get secret key from local storage
-      const storedSecretKey = localStorage.getItem(`prometheusSecretKey_${this.currentUser.uid}`);
-
-      if (storedSecretKey) {
-        this.myKeyPair = {
-          publicKey: nacl.util.decodeBase64(doc.data().publicKey),
-          secretKey: nacl.util.decodeBase64(storedSecretKey)
-        };
+    // ← ADD THIS BLOCK: If not found locally, try to recover from Firestore with password
+    if (!storedSecretKey && doc.data().encryptedSecretKey) {
+      console.log('Secret key not in local storage, attempting recovery from Firestore...');
+      const password = prompt('Enter your password to decrypt messages on this device:');
+      if (password) {
+        try {
+          storedSecretKey = await this.recoverSecretKeyFromPassword(password);
+          this.storeSecretKeyLocally(storedSecretKey); // Save for next time
+          console.log('Secret key recovered from password');
+        } catch (error) {
+          console.error('Failed to recover key:', error);
+          alert('Could not recover encryption key. Wrong password?');
+        }
       } else {
-        console.warn('Secret key not found. User should add this device.');
+        console.log('User cancelled password prompt');
       }
+    }
 
-      console.log('Encryption keys loaded');
+    if (storedSecretKey) {
+      this.myKeyPair = {
+        publicKey: nacl.util.decodeBase64(doc.data().publicKey),
+        secretKey: nacl.util.decodeBase64(storedSecretKey)
+      };
+    } else {
+      console.warn('Secret key not found. User should log in on original device or enter password.');
+    }
+    console.log('Encryption keys loaded');
     } catch (error) {
-      console.error('Error loading encryption keys:', error);
+    console.error('Error loading encryption keys:', error);
+    } finally {
+    this.keysLoading = false;
     }
   }
+
 
   storeSecretKeyLocally(secretKeyBase64) {
     // In production: encrypt this with the user's password using a KDF
     // For now: stored in browser (at rest it's still safer than sending to server)
     localStorage.setItem(`prometheusSecretKey_${this.currentUser.uid}`, secretKeyBase64);
   }
+
+    // ===== PASSWORD-BASED KEY RECOVERY =====
+    // Derive encryption key from password (for multi-device support)
+    async deriveKeyFromPassword(password, userUid) {
+      const encoder = new TextEncoder();
+      const passwordData = encoder.encode(password);
+      const saltData = encoder.encode(userUid); // Use UID as salt
+
+      // Import password as key material
+      const keyMaterial = await crypto.subtle.importKey(
+        'raw',
+        passwordData,
+        'PBKDF2',
+        false,
+        ['deriveBits']
+      );
+
+      // Derive 32 bytes for NaCl secret key
+      const derivedBits = await crypto.subtle.deriveBits(
+        {
+          name: 'PBKDF2',
+          salt: saltData,
+          iterations: 100000,
+          hash: 'SHA-256'
+        },
+        keyMaterial,
+        32 * 8 // 256 bits = 32 bytes
+      );
+
+      return new Uint8Array(derivedBits);
+    }
+
+    // Store encrypted secret key in Firestore (protected by password)
+    async encryptAndStoreSecretKey(secretKeyBase64, password) {
+      const derivedKey = await this.deriveKeyFromPassword(password, this.currentUser.uid);
+      const secretKey = nacl.util.decodeBase64(secretKeyBase64);
+
+      // Encrypt secret key with derived key
+      const nonce = nacl.randomBytes(nacl.secretbox.nonceLength);
+      const encrypted = nacl.secretbox(secretKey, nonce, derivedKey);
+
+      // Store in Firestore
+      await this.db.collection('users').doc(this.currentUser.uid).update({
+        encryptedSecretKey: nacl.util.encodeBase64(encrypted),
+        secretKeyNonce: nacl.util.encodeBase64(nonce)
+      });
+    }
+
+    // Recover secret key from Firestore using password
+    async recoverSecretKeyFromPassword(password) {
+      const userDoc = await this.db.collection('users').doc(this.currentUser.uid).get();
+      const data = userDoc.data();
+
+      if (!data.encryptedSecretKey || !data.secretKeyNonce) {
+        return null;
+      }
+
+      const derivedKey = await this.deriveKeyFromPassword(password, this.currentUser.uid);
+      const encrypted = nacl.util.decodeBase64(data.encryptedSecretKey);
+      const nonce = nacl.util.decodeBase64(data.secretKeyNonce);
+
+      const decrypted = nacl.secretbox.open(encrypted, nonce, derivedKey);
+
+      if (!decrypted) {
+        throw new Error('Failed to recover key - wrong password?');
+      }
+
+      return nacl.util.encodeBase64(decrypted);
+    }
 
     decryptPromiseContent(promise) {
         // ✅ ADD THIS BLOCK - If current user is the sender, show plaintext
@@ -260,6 +354,11 @@ class FirebasePromiseApp {
         // If no encrypted content exists, try fallback to old 'content' field
         if (!promise.contentEncrypted) {
             return promise.content || '[No content]';
+        }
+
+        // ← ADD THIS BLOCK - Check if keys are still loading
+        if (this.keysLoading) {
+        return '[Loading decryption keys...]';
         }
 
         // Current user is the receiver - decrypt with their key
@@ -505,17 +604,39 @@ class FirebasePromiseApp {
             console.log('New receiver ID:', newReceiverId);
             console.log('New receiver public key:', newReceiverPublicKey ? 'Found' : 'Missing');
 
-            // ✅ DECRYPT THE CONTENT (current receiver can read it)
-            let plainContent;
-            try {
-                plainContent = this.decryptPromiseContent(promise);
-                console.log('Decrypted content successfully:', plainContent);
-            } catch (error) {
-                console.error('Failed to decrypt content for re-encryption:', error);
-                this.showToast('Cannot transfer: unable to decrypt promise content', 'error');
-                this.hideLoading();
-                return;
-            }
+        // ✅ DECRYPT THE CONTENT (current receiver can read it)
+        let plainContent;
+
+        // Check if we're the sender - use contentPlainForSender
+        if (promise.senderId === this.currentUser.uid && promise.contentPlainForSender) {
+          plainContent = promise.contentPlainForSender;
+          console.log('Using contentPlainForSender (current user is sender)');
+        } else {
+          // We're the receiver - decrypt with our keys
+          if (!this.myKeyPair || !this.myKeyPair.secretKey) {
+            this.showToast('Cannot transfer: encryption keys not loaded on this device', 'error');
+            this.hideLoading();
+            return;
+          }
+
+          try {
+            plainContent = PromiseEncryption.decrypt(promise.contentEncrypted, this.myKeyPair.secretKey);
+            console.log('Decrypted content successfully:', plainContent);
+          } catch (error) {
+            console.error('Failed to decrypt content for re-encryption:', error);
+            this.showToast('Cannot transfer: unable to decrypt promise content', 'error');
+            this.hideLoading();
+            return;
+          }
+        }
+
+        // Additional safety check - make sure we didn't get an error message
+        if (plainContent.startsWith('[') && plainContent.includes('encrypted')) {
+          this.showToast('Cannot transfer: content not accessible', 'error');
+          this.hideLoading();
+          return;
+        }
+
 
             // ✅ RE-ENCRYPT FOR NEW RECEIVER
             const newEncrypted = PromiseEncryption.encrypt(plainContent, newReceiverPublicKey);
@@ -684,7 +805,7 @@ class FirebasePromiseApp {
   }
 
   // ===== UI METHODS =====
-showApp() {
+async showApp() {
   console.log('Showing app container');
   document.getElementById('authScreen').classList.add('hidden');
   document.getElementById('appContainer').classList.remove('hidden');
@@ -709,46 +830,72 @@ showApp() {
     document.getElementById('appContainer').classList.add('hidden');
   }
 
-  setupEventListeners() {
-    // Logout button
-    const logoutBtn = document.getElementById('logoutBtn');
-    if (logoutBtn) {
-      logoutBtn.addEventListener('click', () => this.logout());
-    }
+        setupEventListeners() {
+            // Logout button
+            const logoutBtn = document.getElementById('logoutBtn');
+            if (logoutBtn) {
+                logoutBtn.addEventListener('click', () => this.logout());
+            }
 
-    // Tab navigation
-    document.querySelectorAll('.nav-tab').forEach(tab => {
-      tab.addEventListener('click', (e) => {
-        const tabName = e.target.dataset.tab;
-        this.switchTab(tabName);
-      });
-    });
+            // Tab navigation
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.addEventListener('click', (e) => {
+                    const tabName = e.target.dataset.tab;
+                    this.switchTab(tabName);
+                });
+            });
 
-    // Forms
-    const createForm = document.getElementById('createPromiseForm');
-    if (createForm) {
-      createForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        this.createPromise();
-      });
-    }
+            // Forms
+            const createForm = document.getElementById('createPromiseForm');
+            if (createForm) {
+                createForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    this.createPromise();
+                });
+            }
 
-    const transferForm = document.getElementById('transferPromiseForm');
-    if (transferForm) {
-      transferForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        this.transferPromise();
-      });
-    }
+            const transferForm = document.getElementById('transferPromiseForm');
+            if (transferForm) {
+                transferForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    this.transferPromise();
+                });
+            }
 
-    const contactForm = document.getElementById('addContactForm');
-    if (contactForm) {
-      contactForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        this.addContact();
-      });
-    }
-  }
+            const contactForm = document.getElementById('addContactForm');
+            if (contactForm) {
+                contactForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    this.addContact();
+                });
+            }
+
+            // ✅ ADD THIS: Transfer promise select preview (set up ONCE, not on every update)
+            const transferSelect = document.getElementById('transferPromiseSelect');
+            if (transferSelect) {
+                transferSelect.addEventListener('change', (e) => {
+                    const promiseId = e.target.value;
+                    const previewContainer = document.getElementById('transferPreview');
+
+                    if (!promiseId || !previewContainer) {
+                        if (previewContainer) previewContainer.innerHTML = '';
+                        return;
+                    }
+
+                    const promise = this.promises.get(promiseId);
+                    if (promise) {
+                        previewContainer.innerHTML = `
+                            <div class="preview-box">
+                                <strong>Promise:</strong> ${this.decryptPromiseContent(promise)}<br>
+                                <strong>From:</strong> ${promise.senderEmail}<br>
+                                <strong>Current Receiver:</strong> ${promise.receiverEmail}
+                            </div>
+                        `;
+                    }
+                });
+            }
+        }
+
 
   switchTab(tabName) {
     document.querySelectorAll('.nav-tab').forEach(tab => {
@@ -873,46 +1020,43 @@ showApp() {
     `).join('') || '<p>No promises received yet</p>';
   }
 
-  updateTransferForm() {
-    const selectElement = document.getElementById('transferPromiseSelect');
-    const previewContainer = document.getElementById('transferPreview');
+        updateTransferForm() {
+        const selectElement = document.getElementById('transferPromiseSelect');
+        const previewContainer = document.getElementById('transferPreview');
 
-    // Populate dropdown with available promises
-    const transferablePromises = Array.from(this.promises.values())
-      .filter(p => p.receiverEmail === this.currentUser.email && !p.locked);
+        // Populate dropdown with available promises
+        const transferablePromises = Array.from(this.promises.values())
+            .filter(p => p.receiverEmail === this.currentUser.email && !p.locked);
 
-    selectElement.innerHTML = '<option value="">Select a promise...</option>' +
-      transferablePromises.map(p =>
-        `<option value="${p.id}">${this.decryptPromiseContent(p).substring(0, 50)}...</option>`
-      ).join('');
+        selectElement.innerHTML = '<option value="">Select a promise...</option>' +
+            transferablePromises.map(p =>
+                `<option value="${p.id}">${this.decryptPromiseContent(p).substring(0, 50)}...</option>`
+            ).join('');
 
-    // Populate transfer receiver dropdown
-    const receiverSelect = document.getElementById('transferReceiver');
-    receiverSelect.innerHTML = '<option value="">Select a contact...</option>' +
-      Array.from(this.contacts.values()).map(contact =>
-        `<option value="${contact.email}">${contact.email}</option>`
-      ).join('');
+        // Populate transfer receiver dropdown
+        const receiverSelect = document.getElementById('transferReceiver');
+        receiverSelect.innerHTML = '<option value="">Select a contact...</option>' +
+            Array.from(this.contacts.values()).map(contact =>
+                `<option value="${contact.email}">${contact.email}</option>`
+            ).join('');
 
-    // Show preview when user selects a promise
-    selectElement.addEventListener('change', (e) => {
-      const promiseId = e.target.value;
-      if (!promiseId) {
-        previewContainer.innerHTML = '';
-        return;
-      }
+        // ✅ REMOVED the addEventListener from here - it's now in setupEventListeners()
 
-      const promise = this.promises.get(promiseId);
-      if (promise) {
-        previewContainer.innerHTML = `
-          <div class="preview-box">
-            <strong>Promise:</strong> ${this.decryptPromiseContent(promise)}<br>
-            <strong>From:</strong> ${promise.senderEmail}<br>
-            <strong>Current Receiver:</strong> ${promise.receiverEmail}
-          </div>
-        `;
-      }
-    });
-  }
+        // Show current preview if a promise is already selected
+        if (selectElement.value) {
+            const promise = this.promises.get(selectElement.value);
+            if (promise && previewContainer) {
+                previewContainer.innerHTML = `
+                    <div class="preview-box">
+                        <strong>Promise:</strong> ${this.decryptPromiseContent(promise)}<br>
+                        <strong>From:</strong> ${promise.senderEmail}<br>
+                        <strong>Current Receiver:</strong> ${promise.receiverEmail}
+                    </div>
+                `;
+            }
+        }
+        }
+
 
   updateAddressBook() {
     const contactsContainer = document.getElementById('contactsList');

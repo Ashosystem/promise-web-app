@@ -168,31 +168,35 @@
 
         <!-- Transfer Promise Tab -->
         <div class="tab-pane" id="transfer">
-          <div class="card">
-            <div class="card__header">
-              <h2>Transfer Promise</h2>
-            </div>
-            <div class="card__body">
-              <form id="transferPromiseForm">
-                <div class="form-group">
-                  <label class="form-label" for="transferPromiseSelect">Select Promise to Transfer</label>
-                  <select class="form-control" id="transferPromiseSelect" required>
-                    <option value="">Select a promise...</option>
-                  </select>
+            <div class="card">
+                <div class="card-header">
+                    <h2>Transfer Promise</h2>
                 </div>
+                <div class="card-body">
+                    <form id="transferPromiseForm">
+                        <div class="form-group">
+                            <label class="form-label" for="transferPromiseSelect">Select Promise to Transfer</label>
+                            <select class="form-control" id="transferPromiseSelect" required>
+                                <option value="">Select a promise...</option>
+                            </select>
+                        </div>
 
-                <div class="form-group">
-                  <label class="form-label" for="transferReceiver">New Receiver</label>
-                  <select class="form-control" id="transferReceiver" required>
-                    <option value="">Select a contact...</option>
-                  </select>
+                        <!-- ✅ ADD THIS: Preview container -->
+                        <div id="transferPreview" style="margin: 15px 0;"></div>
+
+                        <div class="form-group">
+                            <label class="form-label" for="transferReceiver">New Receiver</label>
+                            <select class="form-control" id="transferReceiver" required>
+                                <option value="">Select a contact...</option>
+                            </select>
+                        </div>
+
+                        <button type="submit" class="btn btn--primary btn--full-width">Transfer Promise</button>
+                    </form>
                 </div>
-
-                <button type="submit" class="btn btn--primary btn--full-width">Transfer Promise</button>
-              </form>
             </div>
-          </div>
         </div>
+
 
         <!-- Address Book Tab -->
         <div class="tab-pane" id="address-book">
