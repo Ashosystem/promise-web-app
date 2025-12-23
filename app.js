@@ -501,68 +501,88 @@ class FirebasePromiseApp {
 
   // ===== PROMISE OPERATIONS =====
       async createPromise() {
-        const content = document.getElementById('promiseContent').value.trim();
-        const receiverEmail = document.getElementById('promiseReceiver').value;
-        const expiration = document.getElementById('promiseExpiration').value;
-        const locked = document.getElementById('promiseLock').checked;
+      const content = document.getElementById('promiseContent').value.trim();
+      const receiverEmail = document.getElementById('promiseReceiver').value;
+      const expiration = document.getElementById('promiseExpiration').value;
+      const locked = document.getElementById('promiseLock').checked;
+      const quantity = parseInt(document.getElementById('promiseQuantity').value) || 1;
 
-        if (!content || !receiverEmail) {
-            this.showToast('Please fill in all required fields', 'error');
-            return;
+      if (!content || !receiverEmail) {
+        this.showToast('Please fill in all required fields', 'error');
+        return;
+      }
+
+      if (quantity < 1 || quantity > 1000) {
+        this.showToast('Quantity must be between 1 and 1000', 'error');
+        return;
+      }
+
+      this.showLoading();
+      try {
+        // Check if receiver exists
+        const userQuery = await this.db.collection('users')
+          .where('email', '==', receiverEmail)
+          .get();
+
+        if (userQuery.empty) {
+          this.showToast('Receiver not found', 'error');
+          this.hideLoading();
+          return;
         }
 
-        this.showLoading();
-        try {
-            // Check if receiver exists
-            const userQuery = await this.db.collection('users')
-                .where('email', '==', receiverEmail)
-                .get();
+        const receiverId = userQuery.docs[0].id;
+        // Fetch receiver's public key
+        const receiverUserDoc = await this.db.collection('users').doc(receiverId).get();
+        const receiverPublicKey = receiverUserDoc.data().publicKey;
 
-            if (userQuery.empty) {
-                this.showToast('Receiver not found', 'error');
-                this.hideLoading();
-                return;
-            }
+        // ✅ Encrypt for receiver (only they can read it)
+        const encryptedForReceiver = PromiseEncryption.encrypt(content, receiverPublicKey);
+        // ✅ Encrypt for sender (archive - sender can read from any device)
+        const encryptedForSender = PromiseEncryption.encrypt(content, this.currentUserDoc.publicKey);
 
-            const receiverId = userQuery.docs[0].id;
+        // ✅ BUILD THE PROMISE TEMPLATE (same for all copies)
+        const promiseTemplate = {
+          contentEncryptedForReceiver: encryptedForReceiver,
+          contentEncryptedForSender: encryptedForSender,
+          senderId: this.currentUser.uid,
+          senderEmail: this.currentUser.email,
+          receiverId: receiverId,
+          receiverEmail: receiverEmail,
+          status: locked ? 'locked' : 'active',
+          locked: locked,
+          expiresAt: expiration ? new Date(expiration).toISOString() : null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          transferHistory: []
+        };
 
-            // Fetch receiver's public key
-            const receiverUserDoc = await this.db.collection('users').doc(receiverId).get();
-            const receiverPublicKey = receiverUserDoc.data().publicKey;
+        // ✅ USE BATCH WRITE FOR MULTIPLE PROMISES
+        if (quantity === 1) {
+          // Single promise: use add() for simplicity
+          await this.db.collection('promises').add(promiseTemplate);
+          this.showToast('Promise created successfully', 'success');
+          this.addActivity(`Promise created for ${receiverEmail}: "[encrypted]"`);
+        } else {
+          // Batch create multiple promises
+          const batch = this.db.batch();
+          for (let i = 0; i < quantity; i++) {
+            const docRef = this.db.collection('promises').doc();
+            batch.set(docRef, promiseTemplate);
+          }
+          await batch.commit();
+          this.showToast(`${quantity} promises created successfully`, 'success');
+          this.addActivity(`Batch created ${quantity} promises for ${receiverEmail}`);
+        }
 
-            // ✅ Encrypt for receiver (only they can read it)
-            const encryptedForReceiver = PromiseEncryption.encrypt(content, receiverPublicKey);
-
-            // ✅ Encrypt for sender (archive - sender can read from any device)
-            const encryptedForSender = PromiseEncryption.encrypt(content, this.currentUserDoc.publicKey);
-
-            // Store encrypted data (NO PLAINTEXT!)
-            await this.db.collection('promises').add({
-                // ✅ Encrypted copies - no plaintext stored
-                contentEncryptedForReceiver: encryptedForReceiver,
-                contentEncryptedForSender: encryptedForSender,
-                senderId: this.currentUser.uid,
-                senderEmail: this.currentUser.email,
-                receiverId: receiverId,
-                receiverEmail: receiverEmail,
-                status: locked ? 'locked' : 'active',
-                locked: locked,
-                expiresAt: expiration ? new Date(expiration).toISOString() : null,
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-                transferHistory: []
-            });
-
-            document.getElementById('createPromiseForm').reset();
-            this.showToast('Promise created successfully', 'success');
-            this.addActivity(`Promise created for ${receiverEmail}: "[encrypted]"`);
-        } catch (error) {
-            this.showToast('Failed to create promise', 'error');
-            console.error('Error:', error);
-        } finally {
-            this.hideLoading();
-            }
+        document.getElementById('createPromiseForm').reset();
+      } catch (error) {
+        this.showToast('Failed to create promise', 'error');
+        console.error('Error:', error);
+      } finally {
+        this.hideLoading();
       }
+    }
+
 
 
 
