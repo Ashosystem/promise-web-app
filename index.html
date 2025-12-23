@@ -60,176 +60,255 @@
   </div>
 
   <!-- ===== MAIN APP CONTAINER ===== -->
-  <div id="appContainer" class="app-container hidden">
-    <div class="container">
-      <!-- Header -->
-      <header class="app-header">
-        <h1>Promise Voucher Network</h1>
-        <div class="agent-info">
-          <div class="agent-status" id="currentAgentKey">user@example.com</div>
-          <button id="logoutBtn" class="btn btn--outline btn--sm">Logout</button>
-        </div>
-      </header>
+        <div id="appContainer" class="app-container hidden">
+          <!-- App Layout: Sidebar + Main Content -->
+          <div class="app-layout">
+              <!-- Sidebar Navigation -->
+              <aside class="app-sidebar">
+                  <div class="sidebar-header">
+                      <h2>Promise</h2>
+                      <p class="sidebar-subtitle">Voucher Network</p>
+                  </div>
 
-      <!-- Navigation Tabs -->
-      <nav class="nav-tabs">
-        <button class="nav-tab active" data-tab="dashboard">Dashboard</button>
-        <button class="nav-tab" data-tab="create">Create Promise</button>
-        <button class="nav-tab" data-tab="my-promises">My Promises</button>
-        <button class="nav-tab" data-tab="transfer">Transfer Promise</button>
-        <button class="nav-tab" data-tab="address-book">Address Book</button>
-      </nav>
+                  <nav class="sidebar-nav">
+                      <button class="nav-item active" data-tab="dashboard">
+                          <span class="nav-icon">📊</span>
+                          <span>Dashboard</span>
+                      </button>
+                      <button class="nav-item" data-tab="inbox">
+                          <span class="nav-icon">📥</span>
+                          <span>Inbox</span>
+                          <span class="badge" id="inboxBadge"></span>
+                      </button>
+                      <button class="nav-item" data-tab="outbox">
+                          <span class="nav-icon">📤</span>
+                          <span>Outbox</span>
+                          <span class="badge" id="outboxBadge"></span>
+                      </button>
+                      <button class="nav-item" data-tab="contacts">
+                          <span class="nav-icon">👥</span>
+                          <span>Network</span>
+                          <span class="badge" id="networkBadge"></span>
+                      </button>
+                        <div class="nav-item" data-tab="transfer">
+                        <span class="nav-icon">📤</span>
+                        <span class="nav-label">Transfer</span>
+                        </div>
+                  </nav>
 
-      <!-- Tab Content -->
-      <main class="tab-content">
-        <!-- Dashboard Tab -->
-        <div class="tab-pane active" id="dashboard">
-          <div class="dashboard-grid">
-            <div class="stat-card">
-              <h3>Total Promises</h3>
-              <span class="stat-number" id="totalPromises">0</span>
-            </div>
-            <div class="stat-card">
-              <h3>Active Promises</h3>
-              <span class="stat-number" id="activePromises">0</span>
-            </div>
-            <div class="stat-card">
-              <h3>Redeemed Promises</h3>
-              <span class="stat-number" id="redeemedPromises">0</span>
-            </div>
-            <div class="stat-card">
-              <h3>Network Agents</h3>
-              <span class="stat-number" id="networkAgents">0</span>
-            </div>
-          </div>
+                  <div class="sidebar-footer">
+                      <div class="user-card">
+                          <div class="user-email" id="currentAgentKey"></div>
+                          <button id="logoutBtn" class="btn btn--sm btn--secondary btn--full-width">Logout</button>
+                      </div>
+                  </div>
+              </aside>
 
-          <div class="dashboard-section">
-            <h2>Recent Activity</h2>
-            <div class="activity-list" id="recentActivity">
-              <!-- Activity items will be populated here -->
-            </div>
-          </div>
-        </div>
+              <!-- Main Content Area -->
+              <main class="app-main">
+                  <!-- FAB Button for Creating Promises -->
+                  <button id="createPromiseFAB" class="fab-button" title="Create New Promise">
+                      <span>➕</span>
+                  </button>
 
-        <!-- Create Promise Tab -->
-        <div class="tab-pane" id="create">
-          <div class="card">
-            <div class="card__header">
-              <h2>Create New Promise</h2>
-            </div>
-            <div class="card__body">
-              <form id="createPromiseForm">
-                <div class="form-group">
-                  <label class="form-label" for="promiseContent">Promise Content</label>
-                  <textarea class="form-control" id="promiseContent" rows="3" placeholder="Enter what you promise to do..." required></textarea>
-                </div>
+                  <!-- Tab Content -->
+                  <div class="tab-content">
+                      <!-- Dashboard Tab -->
+                      <div id="dashboard" class="tab-pane active">
+                          <div class="dashboard-header">
+                              <h2>Dashboard</h2>
+                              <p>Overview of your promise network</p>
+                          </div>
 
-                <div class="form-group">
-                  <label class="form-label" for="promiseReceiver">Receiver</label>
-                  <select class="form-control" id="promiseReceiver" required>
-                    <option value="">Select a contact...</option>
-                  </select>
-                </div>
+                          <!-- Key Stats Grid -->
+                          <div class="stats-grid">
+                              <div class="stat-card">
+                                  <div class="stat-icon">📊</div>
+                                  <div class="stat-content">
+                                      <div class="stat-label">Total Promises</div>
+                                      <div class="stat-value" id="totalPromises">0</div>
+                                  </div>
+                              </div>
+                              <div class="stat-card">
+                                  <div class="stat-icon">✨</div>
+                                  <div class="stat-content">
+                                      <div class="stat-label">Active Promises</div>
+                                      <div class="stat-value" id="activePromises">0</div>
+                                  </div>
+                              </div>
+                              <div class="stat-card">
+                                  <div class="stat-icon">✅</div>
+                                  <div class="stat-content">
+                                      <div class="stat-label">Redeemed</div>
+                                      <div class="stat-value" id="redeemedPromises">0</div>
+                                  </div>
+                              </div>
+                              <div class="stat-card">
+                                  <div class="stat-icon">🤝</div>
+                                  <div class="stat-content">
+                                      <div class="stat-label">Connections</div>
+                                      <div class="stat-value" id="networkAgents">0</div>
+                                  </div>
+                              </div>
+                          </div>
 
-                <!-- ✅ ADD THIS NEW BLOCK HERE -->
-                <div class="form-group">
-                  <label class="form-label" for="promiseQuantity">Quantity</label>
-                  <input type="number" class="form-control" id="promiseQuantity" placeholder="How many promises?" value="1" min="1" max="1000">
-                </div>
-                <!-- ✅ END NEW BLOCK -->
+                          <!-- Quick Actions -->
+                          <div class="quick-actions">
+                              <h3>Quick Actions</h3>
+                              <div class="action-buttons">
+                                  <button id="quickCreateBtn" class="btn btn--primary">Create Promise</button>
+                                  <button id="quickViewInboxBtn" class="btn btn--secondary">View Inbox</button>
+                              </div>
+                          </div>
 
-                <div class="form-group">
-                  <label class="form-label" for="promiseExpiration">Expiration Date (Optional)</label>
-                  <input type="datetime-local" class="form-control" id="promiseExpiration">
-                </div>
+                          <!-- Recent Activity -->
+                          <div class="recent-activity">
+                              <h3>Recent Activity</h3>
+                              <div class="activity-log" id="activityLog">
+                                  No recent activity
+                              </div>
+                          </div>
+                      </div>
 
-                <div class="form-group">
-                  <label class="checkbox-label">
-                    <input type="checkbox" id="promiseLock">
-                    Lock this promise (cannot be transferred)
-                  </label>
-                </div>
+                      <!-- Inbox Tab -->
+                      <div id="inbox" class="tab-pane">
+                          <div class="content-header">
+                              <h2>Your Inbox</h2>
+                              <p>Promises sent to you</p>
+                          </div>
 
-                <button type="submit" class="btn btn--primary btn--full-width">Create Promise</button>
-              </form>
-            </div>
-          </div>
-        </div>
+                          <div class="promise-filters">
+                              <button class="filter-btn active" data-filter="all">All</button>
+                              <button class="filter-btn" data-filter="active">Active</button>
+                              <button class="filter-btn" data-filter="redeemed">Redeemed</button>
+                          </div>
 
-        <!-- My Promises Tab -->
-        <div class="tab-pane" id="my-promises">
-          <div class="promises-section">
-            <h2>Promises I've Sent</h2>
-            <div class="promises-list" id="sentPromises">
-              <!-- Sent promises will be populated here -->
-            </div>
-          </div>
+                          <div class="promises-container" id="inboxPromises">
+                              <div class="empty-state">
+                                  <p>📥 No promises received yet</p>
+                                  <small>Promises sent to you will appear here</small>
+                              </div>
+                          </div>
+                      </div>
 
-          <div class="promises-section">
-            <h2>Promises I've Received</h2>
-            <div class="promises-list" id="receivedPromises">
-              <!-- Received promises will be populated here -->
-            </div>
-          </div>
-        </div>
+                      <!-- Outbox Tab -->
+                      <div id="outbox" class="tab-pane">
+                          <div class="content-header">
+                              <h2>Your Outbox</h2>
+                              <p>Promises you've sent</p>
+                          </div>
 
-        <!-- Transfer Promise Tab -->
-        <div class="tab-pane" id="transfer">
-            <div class="card">
-                <div class="card-header">
-                    <h2>Transfer Promise</h2>
-                </div>
-                <div class="card-body">
-                    <form id="transferPromiseForm">
-                        <div class="form-group">
-                            <label class="form-label" for="transferPromiseSelect">Select Promise to Transfer</label>
-                            <select class="form-control" id="transferPromiseSelect" required>
-                                <option value="">Select a promise...</option>
-                            </select>
+                          <div class="promise-filters">
+                              <button class="filter-btn active" data-filter="all">All</button>
+                              <button class="filter-btn" data-filter="active">Active</button>
+                              <button class="filter-btn" data-filter="redeemed">Redeemed</button>
+                          </div>
+
+                          <div class="promises-container" id="outboxPromises">
+                              <div class="empty-state">
+                                  <p>📤 No promises sent yet</p>
+                                  <small>Create your first promise to get started</small>
+                              </div>
+                          </div>
+                      </div>
+
+                      <!-- Create Promise Tab -->
+                      <div id="create" class="tab-pane">
+                          <div class="content-header">
+                              <h2>Create New Promise</h2>
+                              <p>Make a commitment to someone</p>
+                          </div>
+
+                          <form id="createPromiseForm" class="form create-form">
+                              <div class="form-group">
+                                  <label class="form-label" for="promiseContent">What are you promising? *</label>
+                                  <textarea id="promiseContent" class="form-control" placeholder="e.g., 'Help with moving', 'Free dinner', 'Advice on...'..." required></textarea>
+                              </div>
+
+                              <div class="form-group">
+                                  <label class="form-label" for="promiseReceiver">Send to *</label>
+                                  <select id="promiseReceiver" class="form-control">
+                                      <option value="">Select a contact...</option>
+                                  </select>
+                              </div>
+
+                              <div class="form-row">
+                                  <div class="form-group">
+                                      <label class="form-label" for="promiseQuantity">Quantity</label>
+                                      <input type="number" id="promiseQuantity" class="form-control" min="1" max="1000" value="1" required>
+                                  </div>
+
+                                  <div class="form-group">
+                                      <label class="form-label" for="promiseExpiration">Expires</label>
+                                      <input type="date" id="promiseExpiration" class="form-control">
+                                  </div>
+                              </div>
+
+                              <div class="form-group">
+                                  <label class="checkbox-label">
+                                      <input type="checkbox" id="promiseLock">
+                                      <span>Lock this promise (cannot be transferred)</span>
+                                  </label>
+                              </div>
+
+                              <button type="submit" class="btn btn--primary btn--full-width">Create Promise</button>
+                          </form>
+                      </div>
+
+                      <!-- Transfer Promise Tab -->
+                        <div id="transfer" class="tab-pane">
+                          <h2>Transfer Promise</h2>
+                          <p class="tab-description">Give your promise to someone else</p>
+
+                          <form id="transferPromiseForm" class="form">
+                            <div class="form-group">
+                              <label for="transferPromiseSelect" class="form-label">Select Promise to Transfer</label>
+                              <select id="transferPromiseSelect" class="form-control" required>
+                                <option value="">-- Select a promise to transfer --</option>
+                              </select>
+                              <div id="transferPreview" class="preview-box"></div>
+                            </div>
+
+                            <div class="form-group">
+                              <label for="transferReceiver" class="form-label">Transfer To</label>
+                              <select id="transferReceiver" class="form-control" required>
+                                <option value="">-- Select a contact --</option>
+                              </select>
+                            </div>
+
+                            <button type="submit" class="btn btn-primary btn-block">Transfer Promise</button>
+                          </form>
                         </div>
 
-                        <!-- ✅ ADD THIS: Preview container -->
-                        <div id="transferPreview" style="margin: 15px 0;"></div>
-
-                        <div class="form-group">
-                            <label class="form-label" for="transferReceiver">New Receiver</label>
-                            <select class="form-control" id="transferReceiver" required>
-                                <option value="">Select a contact...</option>
-                            </select>
-                        </div>
-
-                        <button type="submit" class="btn btn--primary btn--full-width">Transfer Promise</button>
-                    </form>
-                </div>
-            </div>
-        </div>
 
 
-        <!-- Address Book Tab -->
-        <div class="tab-pane" id="address-book">
-          <div class="card">
-            <div class="card__header">
-              <h2>Address Book</h2>
-            </div>
-            <div class="card__body">
-              <form id="addContactForm">
-                <div class="form-group">
-                  <label class="form-label" for="contactName">Email Address</label>
-                  <input type="email" class="form-control" id="contactName" placeholder="Enter contact email" required>
-                </div>
+                      <!-- Network (Contacts) Tab -->
+                      <div id="contacts" class="tab-pane">
+                          <div class="content-header">
+                              <h2>Your Network</h2>
+                              <p>Manage your connections</p>
+                          </div>
 
-                <button type="submit" class="btn btn--secondary btn--full-width">Add Contact</button>
-              </form>
-            </div>
+                          <form id="addContactForm" class="form add-contact-form">
+                              <div class="form-group">
+                                  <label class="form-label" for="contactName">Add New Connection</label>
+                                  <div class="input-group">
+                                      <input type="email" id="contactName" class="form-control" placeholder="user@example.com" required>
+                                      <button type="submit" class="btn btn--primary">Add</button>
+                                  </div>
+                              </div>
+                          </form>
+
+                          <h3>Connections</h3>
+                          <div class="contacts-list" id="contactsList">
+                              No contacts yet. Start building your network!
+                          </div>
+                      </div>
+                  </div>
+              </main>
           </div>
+      </div>
 
-          <div class="contacts-section">
-            <h3>Contacts</h3>
-            <div class="contacts-list" id="contactsList">
-              <!-- Contacts will be populated here -->
-            </div>
-          </div>
-        </div>
       </main>
     </div>
   </div>
