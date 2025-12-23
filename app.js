@@ -345,34 +345,55 @@ class FirebasePromiseApp {
       return nacl.util.encodeBase64(decrypted);
     }
 
-    decryptPromiseContent(promise) {
-        // ✅ ADD THIS BLOCK - If current user is the sender, show plaintext
-        if (promise.senderId === this.currentUser.uid && promise.contentPlainForSender) {
-            return promise.contentPlainForSender;
-        }
+        decryptPromiseContent(promise) {
+            // Check if keys are still loading
+            if (this.keysLoading) {
+                return '[Loading decryption keys...]';
+            }
 
-        // If no encrypted content exists, try fallback to old 'content' field
-        if (!promise.contentEncrypted) {
-            return promise.content || '[No content]';
-        }
+            if (!this.myKeyPair || !this.myKeyPair.secretKey) {
+                return '[Encrypted - keys not loaded]';
+            }
 
-        // ← ADD THIS BLOCK - Check if keys are still loading
-        if (this.keysLoading) {
-        return '[Loading decryption keys...]';
-        }
+            // ✅ Determine which encrypted version to use based on user's role
+            let encryptedData;
 
-        // Current user is the receiver - decrypt with their key
-        if (!this.myKeyPair || !this.myKeyPair.secretKey) {
-            return '[Encrypted - keys not loaded]';
-        }
+            if (promise.senderId === this.currentUser.uid) {
+                // Current user is the SENDER
+                // ✅ Use their archived copy (works across all devices)
+                encryptedData = promise.contentEncryptedForSender;
+            } else if (promise.receiverEmail === this.currentUser.email) {
+                // Current user is the RECEIVER
+                encryptedData = promise.contentEncryptedForReceiver;
+            } else {
+                // User is neither sender nor receiver
+                return '[Not authorized to view]';
+            }
 
-        try {
-            return PromiseEncryption.decrypt(promise.contentEncrypted, this.myKeyPair.secretKey);
-        } catch (error) {
-            console.error('Failed to decrypt promise:', error);
-            return '[Cannot decrypt - check your keys]';
+            // ✅ BACKWARD COMPATIBILITY: Fallback for old promises
+            if (!encryptedData) {
+                // Try old field names for promises created before this update
+                if (promise.contentPlainForSender && promise.senderId === this.currentUser.uid) {
+                    return promise.contentPlainForSender;
+                }
+                if (promise.contentEncrypted) {
+                    // Old format: single encryption for receiver
+                    encryptedData = promise.contentEncrypted;
+                } else if (promise.content) {
+                    return promise.content;
+                } else {
+                    return '[No content]';
+                }
+            }
+
+            // ✅ Decrypt with user's secret key
+            try {
+                return PromiseEncryption.decrypt(encryptedData, this.myKeyPair.secretKey);
+            } catch (error) {
+                console.error('Failed to decrypt promise:', error);
+                return '[Cannot decrypt - check your keys]';
+            }
         }
-    }
 
 
   // ===== USER PROFILE =====
@@ -479,103 +500,96 @@ class FirebasePromiseApp {
   }
 
   // ===== PROMISE OPERATIONS =====
-  async createPromise() {
-    const content = document.getElementById('promiseContent').value.trim();
-    const receiverEmail = document.getElementById('promiseReceiver').value;
-    const expiration = document.getElementById('promiseExpiration').value;
-    const locked = document.getElementById('promiseLock').checked;
+      async createPromise() {
+        const content = document.getElementById('promiseContent').value.trim();
+        const receiverEmail = document.getElementById('promiseReceiver').value;
+        const expiration = document.getElementById('promiseExpiration').value;
+        const locked = document.getElementById('promiseLock').checked;
 
-    if (!content || !receiverEmail) {
-      this.showToast('Please fill in all required fields', 'error');
-      return;
-    }
+        if (!content || !receiverEmail) {
+            this.showToast('Please fill in all required fields', 'error');
+            return;
+        }
 
-    this.showLoading();
-    try {
-      // Check if receiver exists
-      const userQuery = await this.db.collection('users')
-        .where('email', '==', receiverEmail)
-        .get();
+        this.showLoading();
+        try {
+            // Check if receiver exists
+            const userQuery = await this.db.collection('users')
+                .where('email', '==', receiverEmail)
+                .get();
 
-      if (userQuery.empty) {
-        this.showToast('Receiver not found', 'error');
-        this.hideLoading();
-        return;
+            if (userQuery.empty) {
+                this.showToast('Receiver not found', 'error');
+                this.hideLoading();
+                return;
+            }
+
+            const receiverId = userQuery.docs[0].id;
+
+            // Fetch receiver's public key
+            const receiverUserDoc = await this.db.collection('users').doc(receiverId).get();
+            const receiverPublicKey = receiverUserDoc.data().publicKey;
+
+            // ✅ Encrypt for receiver (only they can read it)
+            const encryptedForReceiver = PromiseEncryption.encrypt(content, receiverPublicKey);
+
+            // ✅ Encrypt for sender (archive - sender can read from any device)
+            const encryptedForSender = PromiseEncryption.encrypt(content, this.currentUserDoc.publicKey);
+
+            // Store encrypted data (NO PLAINTEXT!)
+            await this.db.collection('promises').add({
+                // ✅ Encrypted copies - no plaintext stored
+                contentEncryptedForReceiver: encryptedForReceiver,
+                contentEncryptedForSender: encryptedForSender,
+                senderId: this.currentUser.uid,
+                senderEmail: this.currentUser.email,
+                receiverId: receiverId,
+                receiverEmail: receiverEmail,
+                status: locked ? 'locked' : 'active',
+                locked: locked,
+                expiresAt: expiration ? new Date(expiration).toISOString() : null,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                transferHistory: []
+            });
+
+            document.getElementById('createPromiseForm').reset();
+            this.showToast('Promise created successfully', 'success');
+            this.addActivity(`Promise created for ${receiverEmail}: "[encrypted]"`);
+        } catch (error) {
+            this.showToast('Failed to create promise', 'error');
+            console.error('Error:', error);
+        } finally {
+            this.hideLoading();
+            }
       }
 
-      const receiverId = userQuery.docs[0].id;
-
-      // Fetch receiver's public key
-      const receiverUserDoc = await this.db.collection('users').doc(receiverId).get();
-      const receiverPublicKey = receiverUserDoc.data().publicKey;
-
-      // Encrypt the promise content
-      const encrypted = PromiseEncryption.encrypt(content, receiverPublicKey);
-
-      // Store encrypted data
-      await this.db.collection('promises').add({
-        // ENCRYPTED - only receiver can read
-        contentEncrypted: encrypted,
-
-        // METADATA - not encrypted, used for queries
-        contentPlainForSender: content,  // ← ADD THIS - plaintext for sender
-        senderId: this.currentUser.uid,
-        senderEmail: this.currentUser.email,
-        receiverId: receiverId,
-        receiverEmail: receiverEmail,
-        status: locked ? 'locked' : 'active',
-        locked: locked,
-        expiresAt: expiration ? new Date(expiration).toISOString() : null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        transferHistory: []
-      });
-
-      document.getElementById('createPromiseForm').reset();
-      this.showToast('Promise created successfully', 'success');
-      this.addActivity(`Promise created for ${receiverEmail}: "${content.substring(0, 50)}..."`);
-    } catch (error) {
-      this.showToast('Failed to create promise', 'error');
-      console.error('Error:', error);
-    } finally {
-      this.hideLoading();
-    }
-  }
 
 
-
-    async transferPromise() {
+        async transferPromise() {
         console.log('=== TRANSFER CALLED ===');
         const promiseId = document.getElementById('transferPromiseSelect').value;
         const newReceiverEmail = document.getElementById('transferReceiver').value;
 
-        console.log('Selected promise ID:', promiseId);
-        console.log('New receiver email:', newReceiverEmail);
-
         if (!promiseId || !newReceiverEmail) {
-            console.log('Validation failed - empty fields');
             this.showToast('Please select a promise and new receiver', 'error');
             return;
         }
 
         const promise = this.promises.get(promiseId);
-        console.log('Promise object:', promise);
 
         if (!promise) {
-            console.log('Promise not found in map');
             this.showToast('Promise not found', 'error');
             return;
         }
 
         if (promise.locked) {
-            console.log('Promise is locked');
             this.showToast('Cannot transfer locked promise', 'error');
             return;
         }
 
         // Check if user is the current receiver
         if (promise.receiverEmail !== this.currentUser.email) {
-            console.log('User is not the current receiver');
             this.showToast('Only the current receiver can transfer this promise', 'error');
             return;
         }
@@ -583,15 +597,12 @@ class FirebasePromiseApp {
         this.showLoading();
 
         try {
-            console.log('Looking up new receiver...');
+            // Look up new receiver
             const userQuery = await this.db.collection('users')
                 .where('email', '==', newReceiverEmail)
                 .get();
 
-            console.log('User query result:', userQuery.size, 'docs');
-
             if (userQuery.empty) {
-                console.log('New receiver not found');
                 this.showToast('New receiver not found', 'error');
                 this.hideLoading();
                 return;
@@ -601,52 +612,51 @@ class FirebasePromiseApp {
             const newReceiverDoc = userQuery.docs[0].data();
             const newReceiverPublicKey = newReceiverDoc.publicKey;
 
-            console.log('New receiver ID:', newReceiverId);
-            console.log('New receiver public key:', newReceiverPublicKey ? 'Found' : 'Missing');
+            // ✅ DECRYPT THE CONTENT
+            // Current receiver (me) decrypts with their key
+            if (!this.myKeyPair || !this.myKeyPair.secretKey) {
+                this.showToast('Cannot transfer: encryption keys not loaded on this device', 'error');
+                this.hideLoading();
+                return;
+            }
 
-        // ✅ DECRYPT THE CONTENT (current receiver can read it)
-        let plainContent;
+            let plainContent;
 
-        // Check if we're the sender - use contentPlainForSender
-        if (promise.senderId === this.currentUser.uid && promise.contentPlainForSender) {
-          plainContent = promise.contentPlainForSender;
-          console.log('Using contentPlainForSender (current user is sender)');
-        } else {
-          // We're the receiver - decrypt with our keys
-          if (!this.myKeyPair || !this.myKeyPair.secretKey) {
-            this.showToast('Cannot transfer: encryption keys not loaded on this device', 'error');
-            this.hideLoading();
-            return;
-          }
+            // ✅ Use the correct encrypted version
+            let encryptedData = promise.contentEncryptedForReceiver;
 
-          try {
-            plainContent = PromiseEncryption.decrypt(promise.contentEncrypted, this.myKeyPair.secretKey);
-            console.log('Decrypted content successfully:', plainContent);
-          } catch (error) {
-            console.error('Failed to decrypt content for re-encryption:', error);
-            this.showToast('Cannot transfer: unable to decrypt promise content', 'error');
-            this.hideLoading();
-            return;
-          }
-        }
+            // Fallback for old promises
+            if (!encryptedData) {
+                encryptedData = promise.contentEncrypted;
+            }
 
-        // Additional safety check - make sure we didn't get an error message
-        if (plainContent.startsWith('[') && plainContent.includes('encrypted')) {
-          this.showToast('Cannot transfer: content not accessible', 'error');
-          this.hideLoading();
-          return;
-        }
+            try {
+                plainContent = PromiseEncryption.decrypt(encryptedData, this.myKeyPair.secretKey);
+                console.log('Decrypted content successfully');
+            } catch (error) {
+                console.error('Failed to decrypt content for re-encryption:', error);
+                this.showToast('Cannot transfer: unable to decrypt promise content', 'error');
+                this.hideLoading();
+                return;
+            }
 
+            // Safety check
+            if (plainContent.startsWith('[') && plainContent.includes('encrypted')) {
+                this.showToast('Cannot transfer: content not accessible', 'error');
+                this.hideLoading();
+                return;
+            }
 
             // ✅ RE-ENCRYPT FOR NEW RECEIVER
-            const newEncrypted = PromiseEncryption.encrypt(plainContent, newReceiverPublicKey);
-            console.log('Re-encrypted content for new receiver');
+            const newEncryptedForReceiver = PromiseEncryption.encrypt(plainContent, newReceiverPublicKey);
 
             // ✅ BUILD UPDATE OBJECT
+            // Only update the receiver's copy
+            // The sender's archive stays the same (they always have it)
             const updateData = {
                 receiverId: newReceiverId,
                 receiverEmail: newReceiverEmail,
-                contentEncrypted: newEncrypted,  // Re-encrypted content
+                contentEncryptedForReceiver: newEncryptedForReceiver,
                 updatedAt: new Date().toISOString(),
                 transferHistory: firebase.firestore.FieldValue.arrayUnion({
                     from: promise.receiverEmail,
@@ -655,25 +665,19 @@ class FirebasePromiseApp {
                 })
             };
 
-            // ✅ REMOVE contentPlainForSender if transferring to someone else
-            if (newReceiverId !== promise.senderId) {
-                updateData.contentPlainForSender = firebase.firestore.FieldValue.delete();
-                console.log('Removing contentPlainForSender (new receiver is not the sender)');
-            }
+            // ✅ NOTE: contentEncryptedForSender is NOT changed
+            // The original sender always keeps their archive copy
+            // If promise gets transferred back to sender later, they can still decrypt it
 
-            // ✅ UPDATE PROMISE
             console.log('Updating promise in Firestore...');
             await this.db.collection('promises').doc(promiseId).update(updateData);
-
             console.log('Promise transferred successfully');
+
             document.getElementById('transferPromiseForm').reset();
             this.showToast('Promise transferred successfully', 'success');
             this.addActivity(`Promise transferred to ${newReceiverEmail}`);
-
         } catch (error) {
             console.error('TRANSFER ERROR:', error);
-            console.error('Error code:', error.code);
-            console.error('Error message:', error.message);
             this.showToast('Failed to transfer promise: ' + error.message, 'error');
         } finally {
             this.hideLoading();
