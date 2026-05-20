@@ -85,6 +85,16 @@
                           <span>Outbox</span>
                           <span class="badge" id="outboxBadge"></span>
                       </button>
+                      <button class="nav-item" data-tab="redeemed">
+                          <span class="nav-icon">✅</span>
+                          <span>Redeemed</span>
+                          <span class="badge" id="redeemedBadge"></span>
+                      </button>
+                      <button class="nav-item" data-tab="expired">
+                          <span class="nav-icon">⏰</span>
+                          <span>Expired</span>
+                          <span class="badge" id="expiredBadge"></span>
+                      </button>
                       <button class="nav-item" data-tab="contacts">
                           <span class="nav-icon">👥</span>
                           <span>Network</span>
@@ -180,7 +190,6 @@
                           <div class="promise-filters">
                               <button class="filter-btn active" data-filter="all">All</button>
                               <button class="filter-btn" data-filter="active">Active</button>
-                              <button class="filter-btn" data-filter="redeemed">Redeemed</button>
                           </div>
 
                           <div class="promises-container" id="inboxPromises">
@@ -201,13 +210,42 @@
                           <div class="promise-filters">
                               <button class="filter-btn active" data-filter="all">All</button>
                               <button class="filter-btn" data-filter="active">Active</button>
-                              <button class="filter-btn" data-filter="redeemed">Redeemed</button>
                           </div>
 
                           <div class="promises-container" id="outboxPromises">
                               <div class="empty-state">
                                   <p>📤 No promises sent yet</p>
                                   <small>Create your first promise to get started</small>
+                              </div>
+                          </div>
+                      </div>
+
+                      <!-- Redeemed Tab -->
+                      <div id="redeemed" class="tab-pane">
+                          <div class="content-header">
+                              <h2>Redeemed</h2>
+                              <p>Promises that have been redeemed</p>
+                          </div>
+
+                          <div class="promises-container" id="redeemedList">
+                              <div class="empty-state">
+                                  <p>✅ No redeemed promises yet</p>
+                                  <small>Redeemed promises are collected here</small>
+                              </div>
+                          </div>
+                      </div>
+
+                      <!-- Expired Tab -->
+                      <div id="expired" class="tab-pane">
+                          <div class="content-header">
+                              <h2>Expired</h2>
+                              <p>Promises that passed their expiry date without being redeemed</p>
+                          </div>
+
+                          <div class="promises-container" id="expiredPromises">
+                              <div class="empty-state">
+                                  <p>⏰ No expired promises</p>
+                                  <small>Promises not redeemed before their expiry date appear here</small>
                               </div>
                           </div>
                       </div>

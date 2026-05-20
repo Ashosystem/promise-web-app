@@ -1076,6 +1076,12 @@ class FirebasePromiseApp {
         case 'outbox':
           this.updateOutbox();
           break;
+        case 'redeemed':
+          this.updateRedeemed();
+          break;
+        case 'expired':
+          this.updateExpired();
+          break;
         case 'create':
           this.updateCreatePromiseForm();
           break;
@@ -1134,6 +1140,12 @@ class FirebasePromiseApp {
         case 'outbox':
           this.updateOutbox();
           break;
+        case 'redeemed':
+          this.updateRedeemed();
+          break;
+        case 'expired':
+          this.updateExpired();
+          break;
         case 'create':
           this.updateCreatePromiseForm();
           break;
@@ -1146,14 +1158,25 @@ class FirebasePromiseApp {
     }
 
         updateBadges() {
-          // Count inbox promises (received, not redeemed)
-          const inboxCount = Array.from(this.promises.values())
-            .filter(p => p.receiverEmail === this.currentUser.email && p.status !== 'redeemed')
+          const all = Array.from(this.promises.values());
+
+          // Inbox: active promises received by me
+          const inboxCount = all
+            .filter(p => p.receiverEmail === this.currentUser.email && this.isActive(p))
             .length;
 
-          // Count outbox promises (sent, active)
-          const outboxCount = Array.from(this.promises.values())
-            .filter(p => p.senderId === this.currentUser.uid && p.status !== 'redeemed')
+          // Outbox: active promises I sent
+          const outboxCount = all
+            .filter(p => p.senderId === this.currentUser.uid && this.isActive(p))
+            .length;
+
+          // Redeemed / Expired: mine (sent or received), in that end-state
+          const redeemedCount = all
+            .filter(p => this.isMine(p) && p.status === 'redeemed')
+            .length;
+
+          const expiredCount = all
+            .filter(p => this.isMine(p) && this.isExpired(p))
             .length;
 
           // Count contacts
@@ -1161,10 +1184,14 @@ class FirebasePromiseApp {
 
           const inboxBadge = document.getElementById('inboxBadge');
           const outboxBadge = document.getElementById('outboxBadge');
+          const redeemedBadge = document.getElementById('redeemedBadge');
+          const expiredBadge = document.getElementById('expiredBadge');
           const networkBadge = document.getElementById('networkBadge');
 
           if (inboxBadge) inboxBadge.textContent = inboxCount > 0 ? inboxCount : '';
           if (outboxBadge) outboxBadge.textContent = outboxCount > 0 ? outboxCount : '';
+          if (redeemedBadge) redeemedBadge.textContent = redeemedCount > 0 ? redeemedCount : '';
+          if (expiredBadge) expiredBadge.textContent = expiredCount > 0 ? expiredCount : '';
           if (networkBadge) networkBadge.textContent = networkCount > 0 ? networkCount : '';
         }
 
@@ -1172,14 +1199,15 @@ class FirebasePromiseApp {
       const container = document.getElementById('inboxPromises');
       if (!container) return;
 
+      // Inbox shows only ACTIVE received promises — redeemed/expired move to their own tabs
       const receivedPromises = Array.from(this.promises.values())
-        .filter(p => p.receiverEmail === this.currentUser.email)
+        .filter(p => p.receiverEmail === this.currentUser.email && this.isActive(p))
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
       if (receivedPromises.length === 0) {
         container.innerHTML = `
           <div class="empty-state">
-            <p>📥 No promises received yet</p>
+            <p>📥 No active promises received</p>
             <small>Promises sent to you will appear here</small>
           </div>
         `;
@@ -1195,14 +1223,15 @@ class FirebasePromiseApp {
       const container = document.getElementById('outboxPromises');
       if (!container) return;
 
+      // Outbox shows only ACTIVE sent promises — redeemed/expired move to their own tabs
       const sentPromises = Array.from(this.promises.values())
-        .filter(p => p.senderId === this.currentUser.uid)
+        .filter(p => p.senderId === this.currentUser.uid && this.isActive(p))
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
       if (sentPromises.length === 0) {
         container.innerHTML = `
           <div class="empty-state">
-            <p>📤 No promises sent yet</p>
+            <p>📤 No active promises sent</p>
             <small>Create your first promise to get started</small>
           </div>
         `;
@@ -1214,14 +1243,64 @@ class FirebasePromiseApp {
         .join('');
     }
 
+    // Redeemed: every promise of mine (sent or received) that has been redeemed
+    updateRedeemed() {
+      const container = document.getElementById('redeemedList');
+      if (!container) return;
+
+      const redeemedPromises = Array.from(this.promises.values())
+        .filter(p => this.isMine(p) && p.status === 'redeemed')
+        .sort((a, b) => new Date(b.redeemedAt || b.updatedAt || b.createdAt) - new Date(a.redeemedAt || a.updatedAt || a.createdAt));
+
+      if (redeemedPromises.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <p>✅ No redeemed promises yet</p>
+            <small>Promises you or others redeem will be collected here</small>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = redeemedPromises
+        .map(p => this.renderPromiseCard(p, p.receiverEmail === this.currentUser.email))
+        .join('');
+    }
+
+    // Expired: every promise of mine (sent or received) past its expiry that was never redeemed
+    updateExpired() {
+      const container = document.getElementById('expiredPromises');
+      if (!container) return;
+
+      const expiredPromises = Array.from(this.promises.values())
+        .filter(p => this.isMine(p) && this.isExpired(p))
+        .sort((a, b) => new Date(b.expiresAt) - new Date(a.expiresAt));
+
+      if (expiredPromises.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <p>⏰ No expired promises</p>
+            <small>Promises not redeemed before their expiry date will appear here</small>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = expiredPromises
+        .map(p => this.renderPromiseCard(p, p.receiverEmail === this.currentUser.email))
+        .join('');
+    }
+
     renderPromiseCard(promise, isInbox) {
       const content = this.decryptPromiseContent(promise);
-      const statusClass = promise.status === 'redeemed' ? 'redeemed' : (promise.locked ? 'locked' : '');
-      const statusText = promise.status === 'redeemed' ? '✅ Redeemed' : (promise.locked ? '🔒 Locked' : '✨ Active');
+      const expired = this.isExpired(promise);
+      const statusClass = promise.status === 'redeemed' ? 'redeemed' : (expired ? 'expired' : (promise.locked ? 'locked' : ''));
+      const statusText = promise.status === 'redeemed' ? '✅ Redeemed' : (expired ? '⏰ Expired' : (promise.locked ? '🔒 Locked' : '✨ Active'));
 
       const isReceiver = promise.receiverEmail === this.currentUser.email;
-      const canTransfer = isReceiver && !promise.locked && promise.status !== 'redeemed';
-      const canRedeem = isReceiver && promise.status !== 'redeemed';
+      // Expired or redeemed promises can no longer be acted on
+      const canTransfer = isReceiver && !promise.locked && promise.status !== 'redeemed' && !expired;
+      const canRedeem = isReceiver && promise.status !== 'redeemed' && !expired;
 
       const createdDate = new Date(promise.createdAt).toLocaleDateString();
 
@@ -1271,40 +1350,30 @@ class FirebasePromiseApp {
     }
 
     filterPromises(tabId, filterValue) {
+      // Inbox/Outbox only ever hold active promises now (redeemed/expired have their
+      // own tabs), so "All" and "Active" resolve to the same live set.
       if (tabId === 'inbox') {
         const container = document.getElementById('inboxPromises');
         if (!container) return;
 
-        let receivedPromises = Array.from(this.promises.values())
-          .filter(p => p.receiverEmail === this.currentUser.email);
-
-        // Apply filter
-        if (filterValue === 'redeemed') {
-          receivedPromises = receivedPromises.filter(p => p.status === 'redeemed');
-        } else if (filterValue === 'active') {
-          receivedPromises = receivedPromises.filter(p => p.status !== 'redeemed');
-        }
+        const receivedPromises = Array.from(this.promises.values())
+          .filter(p => p.receiverEmail === this.currentUser.email && this.isActive(p))
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
         container.innerHTML = receivedPromises.length === 0
-          ? `<div class="empty-state"><p>No ${filterValue} promises</p></div>`
+          ? `<div class="empty-state"><p>No active promises</p></div>`
           : receivedPromises.map(p => this.renderPromiseCard(p, true)).join('');
       }
       else if (tabId === 'outbox') {
         const container = document.getElementById('outboxPromises');
         if (!container) return;
 
-        let sentPromises = Array.from(this.promises.values())
-          .filter(p => p.senderId === this.currentUser.uid);
-
-        // Apply filter
-        if (filterValue === 'redeemed') {
-          sentPromises = sentPromises.filter(p => p.status === 'redeemed');
-        } else if (filterValue === 'active') {
-          sentPromises = sentPromises.filter(p => p.status !== 'redeemed');
-        }
+        const sentPromises = Array.from(this.promises.values())
+          .filter(p => p.senderId === this.currentUser.uid && this.isActive(p))
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
         container.innerHTML = sentPromises.length === 0
-          ? `<div class="empty-state"><p>No ${filterValue} promises</p></div>`
+          ? `<div class="empty-state"><p>No active promises</p></div>`
           : sentPromises.map(p => this.renderPromiseCard(p, false)).join('');
       }
     }
@@ -1318,7 +1387,7 @@ class FirebasePromiseApp {
       .filter(p => p.receiverEmail === this.currentUser.email);
 
     const activeCount = Array.from(this.promises.values())
-      .filter(p => p.status === 'active' || p.status === 'locked').length;
+      .filter(p => this.isActive(p)).length;
 
     const redeemedCount = Array.from(this.promises.values())
       .filter(p => p.status === 'redeemed').length;
@@ -1353,6 +1422,25 @@ class FirebasePromiseApp {
   isValidEmail(email) {
     const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return re.test(email);
+  }
+
+  // ===== PROMISE STATE HELPERS =====
+  // Does this promise belong to me (as sender or current receiver)?
+  isMine(promise) {
+    return promise.senderId === this.currentUser.uid
+      || promise.receiverEmail === this.currentUser.email;
+  }
+
+  // Past its expiry date and never redeemed
+  isExpired(promise) {
+    return promise.status !== 'redeemed'
+      && !!promise.expiresAt
+      && new Date(promise.expiresAt) < new Date();
+  }
+
+  // Live promise: neither redeemed nor expired (this is what Inbox/Outbox show)
+  isActive(promise) {
+    return promise.status !== 'redeemed' && !this.isExpired(promise);
   }
 
   addActivity(message) {
