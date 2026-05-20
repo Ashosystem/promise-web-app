@@ -565,13 +565,18 @@ class FirebasePromiseApp {
   // ===== PROMISE OPERATIONS =====
       async createPromise() {
       const content = document.getElementById('promiseContent').value.trim();
-      const receiverEmail = document.getElementById('promiseReceiver').value;
+      const receiverEmail = document.getElementById('promiseReceiver').value.trim();
       const expiration = document.getElementById('promiseExpiration').value;
       const locked = document.getElementById('promiseLock').checked;
       const quantity = parseInt(document.getElementById('promiseQuantity').value) || 1;
 
       if (!content || !receiverEmail) {
         this.showToast('Please fill in all required fields', 'error');
+        return;
+      }
+
+      if (!this.isValidEmail(receiverEmail)) {
+        this.showToast('Please enter a valid email address for the recipient', 'error');
         return;
       }
 
@@ -594,6 +599,26 @@ class FirebasePromiseApp {
         }
 
         const receiverId = userQuery.docs[0].id;
+
+        // If the recipient was typed in (not an existing contact), add them to the
+        // Network automatically so the user can grow their contacts from this screen.
+        if (!this.contacts.has(receiverEmail)) {
+          try {
+            await this.db.collection('users')
+              .doc(this.currentUser.uid)
+              .collection('contacts')
+              .doc(receiverId)
+              .set({
+                email: receiverEmail,
+                addedAt: new Date().toISOString()
+              });
+            this.addActivity(`Contact "${receiverEmail}" added`);
+          } catch (e) {
+            // Non-fatal — sending the promise still proceeds
+            console.error('Failed to auto-add contact:', e);
+          }
+        }
+
         // Fetch receiver's public key
         const receiverUserDoc = await this.db.collection('users').doc(receiverId).get();
         const receiverPublicKey = receiverUserDoc.data().publicKey;
@@ -994,6 +1019,16 @@ class FirebasePromiseApp {
                 createForm.addEventListener('submit', (e) => {
                     e.preventDefault();
                     this.createPromise();
+                });
+            }
+
+            // "Choose an existing contact" dropdown fills the typeable recipient input
+            const receiverSelect = document.getElementById('promiseReceiverSelect');
+            if (receiverSelect) {
+                receiverSelect.addEventListener('change', (e) => {
+                    if (e.target.value) {
+                        document.getElementById('promiseReceiver').value = e.target.value;
+                    }
                 });
             }
 
@@ -1411,11 +1446,22 @@ class FirebasePromiseApp {
   }
 
   updateCreatePromiseForm() {
-    const receiverSelect = document.getElementById('promiseReceiver');
-    receiverSelect.innerHTML = '<option value="">Select a contact...</option>' +
-      Array.from(this.contacts.values()).map(contact =>
-        `<option value="${contact.email}">${contact.email}</option>`
-      ).join('');
+    // The "Send to" field is a typeable email input (datalist autocomplete) plus an
+    // explicit dropdown of existing contacts that fills the input when chosen.
+    const contacts = Array.from(this.contacts.values());
+
+    const datalist = document.getElementById('contactOptions');
+    if (datalist) {
+      datalist.innerHTML = contacts
+        .map(contact => `<option value="${contact.email}"></option>`)
+        .join('');
+    }
+
+    const select = document.getElementById('promiseReceiverSelect');
+    if (select) {
+      select.innerHTML = '<option value="">— or choose an existing contact —</option>' +
+        contacts.map(contact => `<option value="${contact.email}">${contact.email}</option>`).join('');
+    }
   }
 
   // ===== UTILITIES =====

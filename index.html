@@ -265,9 +265,12 @@
 
                               <div class="form-group">
                                   <label class="form-label" for="promiseReceiver">Send to *</label>
-                                  <select id="promiseReceiver" class="form-control">
-                                      <option value="">Select a contact...</option>
+                                  <input type="email" id="promiseReceiver" class="form-control" list="contactOptions" placeholder="Type an email, or pick a contact below..." autocomplete="off" required>
+                                  <datalist id="contactOptions"></datalist>
+                                  <select id="promiseReceiverSelect" class="form-control promise-receiver-select">
+                                      <option value="">— or choose an existing contact —</option>
                                   </select>
+                                  <small class="form-hint">Pick an existing contact, or type a new email — new recipients are added to your Network automatically.</small>
                               </div>
 
                               <div class="form-row">

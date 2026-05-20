@@ -450,6 +450,17 @@ select.form-control {
   margin-bottom: var(--space-16);
 }
 
+.form-hint {
+  display: block;
+  margin-top: var(--space-4);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.promise-receiver-select {
+  margin-top: var(--space-8);
+}
+
 /* Card component */
 .card {
   background-color: var(--color-surface);
