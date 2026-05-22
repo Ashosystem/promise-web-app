@@ -37,11 +37,33 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x android/gradlew
 
+      - name: Ensure fixed debug keystore
+        run: |
+          if [ ! -f android/app/debug.keystore ]; then
+            echo "No committed keystore — generating a fixed one to upload."
+            keytool -genkeypair -v \
+              -keystore android/app/debug.keystore \
+              -alias androiddebugkey -storepass android -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            echo "GENERATED_KEYSTORE=true" >> $GITHUB_ENV
+          else
+            echo "Using committed keystore."
+          fi
+
+      - name: Print debug keystore SHA-1
+        run: keytool -list -v -keystore android/app/debug.keystore -alias androiddebugkey -storepass android -keypass android 2>/dev/null | grep -i "sha" || true
+
       - name: Build debug APK
         run: cd android && ./gradlew assembleDebug --no-daemon
 
-      - name: Print debug keystore SHA-1
-        run: keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android 2>/dev/null | grep -i "sha" || true
+      - name: Upload generated keystore
+        if: env.GENERATED_KEYSTORE == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-keystore
+          path: android/app/debug.keystore
+          retention-days: 7
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

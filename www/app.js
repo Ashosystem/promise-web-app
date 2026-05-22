@@ -1,3 +1,7 @@
+// OAuth Web Client ID from Firebase Console (Authentication > Sign-in method > Google > Web SDK config).
+// Required for native Google Sign-In on Android.
+const GOOGLE_WEB_CLIENT_ID = 'REPLACE_WITH_WEB_CLIENT_ID.apps.googleusercontent.com';
+
 // ===== ENCRYPTION UTILITY =====
 class PromiseEncryption {
   /**
@@ -289,16 +293,44 @@ class FirebasePromiseApp {
 
 
 
+  isNativePlatform() {
+    return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  }
+
   async signInWithGoogle() {
-    const provider = new firebase.auth.GoogleAuthProvider();
+    const errEl = document.getElementById('loginError');
+    errEl.textContent = '';
     try {
-      await this.auth.signInWithRedirect(provider);
+      if (this.isNativePlatform()) {
+        await this.signInWithGoogleNative();
+      } else {
+        const provider = new firebase.auth.GoogleAuthProvider();
+        await this.auth.signInWithPopup(provider);
+      }
+      // onAuthStateChanged handles the rest
     } catch (error) {
-      document.getElementById('loginError').textContent = error.message;
+      errEl.textContent = error.message || 'Google sign-in failed.';
     }
   }
 
+  async signInWithGoogleNative() {
+    const SocialLogin = window.Capacitor.Plugins.SocialLogin;
+    if (!this.socialLoginInitialized) {
+      await SocialLogin.initialize({ google: { webClientId: GOOGLE_WEB_CLIENT_ID } });
+      this.socialLoginInitialized = true;
+    }
+    const res = await SocialLogin.login({
+      provider: 'google',
+      options: { scopes: ['email', 'profile'] }
+    });
+    const idToken = res && res.result && res.result.idToken;
+    if (!idToken) throw new Error('No ID token returned from Google.');
+    const credential = firebase.auth.GoogleAuthProvider.credential(idToken);
+    await this.auth.signInWithCredential(credential);
+  }
+
   async checkRedirectResult() {
+    if (this.isNativePlatform()) return;
     try {
       const result = await this.auth.getRedirectResult();
       if (result && result.user) {
