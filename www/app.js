@@ -1,6 +1,6 @@
 // OAuth Web Client ID from Firebase Console (Authentication > Sign-in method > Google > Web SDK config).
 // Required for native Google Sign-In on Android.
-const GOOGLE_WEB_CLIENT_ID = 'REPLACE_WITH_WEB_CLIENT_ID.apps.googleusercontent.com';
+const GOOGLE_WEB_CLIENT_ID = '508110234402-g2lcnqa1d7og0rk91eir0ks8j2tqmqb7.apps.googleusercontent.com';
 
 // ===== ENCRYPTION UTILITY =====
 class PromiseEncryption {
