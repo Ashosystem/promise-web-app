@@ -294,7 +294,11 @@ class FirebasePromiseApp {
 
 
   isNativePlatform() {
-    return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+    const C = window.Capacitor;
+    if (!C) return false;
+    if (typeof C.isNativePlatform === 'function') return C.isNativePlatform();
+    if (typeof C.getPlatform === 'function') return C.getPlatform() !== 'web';
+    return false;
   }
 
   async signInWithGoogle() {
@@ -309,20 +313,21 @@ class FirebasePromiseApp {
       }
       // onAuthStateChanged handles the rest
     } catch (error) {
-      errEl.textContent = error.message || 'Google sign-in failed.';
+      const plat = (window.Capacitor && window.Capacitor.getPlatform) ? window.Capacitor.getPlatform() : 'unknown';
+      errEl.textContent = `[${plat}] ${error.message || 'Google sign-in failed.'}`;
     }
   }
 
   async signInWithGoogleNative() {
-    const SocialLogin = window.Capacitor.Plugins.SocialLogin;
+    const SocialLogin = window.Capacitor.Plugins && window.Capacitor.Plugins.SocialLogin;
+    if (!SocialLogin) throw new Error('SocialLogin plugin not available.');
     if (!this.socialLoginInitialized) {
       await SocialLogin.initialize({ google: { webClientId: GOOGLE_WEB_CLIENT_ID } });
       this.socialLoginInitialized = true;
     }
-    const res = await SocialLogin.login({
-      provider: 'google',
-      options: { scopes: ['email', 'profile'] }
-    });
+    // No custom scopes: default email/profile/openid come back without the
+    // extra Authorization flow (which would require a modified MainActivity).
+    const res = await SocialLogin.login({ provider: 'google', options: {} });
     const idToken = res && res.result && res.result.idToken;
     if (!idToken) throw new Error('No ID token returned from Google.');
     const credential = firebase.auth.GoogleAuthProvider.credential(idToken);
