@@ -1,0 +1,14 @@
+{
+  "name": "promise-voucher-network",
+  "version": "1.0.0",
+  "description": "Promise Voucher Network — make and honour personal commitments",
+  "scripts": {
+    "sync": "cap sync android",
+    "build:android": "cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4"
+  }
+}

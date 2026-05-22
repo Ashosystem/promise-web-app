@@ -1,0 +1,11 @@
+{
+  "appId": "com.ashosystem.promisevoucher",
+  "appName": "Promise",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}
