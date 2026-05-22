@@ -41,7 +41,7 @@ jobs:
         run: cd android && ./gradlew assembleDebug --no-daemon
 
       - name: Print debug keystore SHA-1
-        run: keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android 2>/dev/null | grep "SHA1:"
+        run: keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android 2>/dev/null | grep -i "sha" || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
