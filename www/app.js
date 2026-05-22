@@ -565,7 +565,8 @@ class FirebasePromiseApp {
   // ===== PROMISE OPERATIONS =====
       async createPromise() {
       const content = document.getElementById('promiseContent').value.trim();
-      const receiverEmail = document.getElementById('promiseReceiver').value.trim();
+      const receiverEmail = document.getElementById('promiseReceiver').value.trim()
+          || document.getElementById('promiseReceiverSelect').value.trim();
       const expiration = document.getElementById('promiseExpiration').value;
       const locked = document.getElementById('promiseLock').checked;
       const quantity = parseInt(document.getElementById('promiseQuantity').value) || 1;
