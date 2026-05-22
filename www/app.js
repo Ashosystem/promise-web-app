@@ -110,6 +110,38 @@ class FirebasePromiseApp {
         signupForm.dataset.initialized = 'true';
       }
 
+      // Check for Google redirect result on load
+      this.checkRedirectResult();
+
+      const googleBtn = document.getElementById('googleSignInBtn');
+      if (googleBtn && !googleBtn.dataset.initialized) {
+        googleBtn.addEventListener('click', () => this.signInWithGoogle());
+        googleBtn.dataset.initialized = 'true';
+      }
+
+      const sendCodeBtn = document.getElementById('sendCodeBtn');
+      if (sendCodeBtn && !sendCodeBtn.dataset.initialized) {
+        sendCodeBtn.addEventListener('click', () => this.sendPhoneCode());
+        sendCodeBtn.dataset.initialized = 'true';
+      }
+
+      const verifyCodeBtn = document.getElementById('verifyCodeBtn');
+      if (verifyCodeBtn && !verifyCodeBtn.dataset.initialized) {
+        verifyCodeBtn.addEventListener('click', () => this.verifyPhoneCode());
+        verifyCodeBtn.dataset.initialized = 'true';
+      }
+
+      const backToPhoneBtn = document.getElementById('backToPhoneBtn');
+      if (backToPhoneBtn && !backToPhoneBtn.dataset.initialized) {
+        backToPhoneBtn.addEventListener('click', () => {
+          document.getElementById('phoneStep2').classList.add('hidden');
+          document.getElementById('phoneStep1').classList.remove('hidden');
+          document.getElementById('phoneAuthError').textContent = '';
+          this.recaptchaVerifier = null;
+        });
+        backToPhoneBtn.dataset.initialized = 'true';
+      }
+
       if (loginTab && !loginTab.dataset.initialized) {
         loginTab.addEventListener('click', () => {
           this.switchAuthMode('login');
@@ -256,6 +288,70 @@ class FirebasePromiseApp {
 
 
 
+
+  async signInWithGoogle() {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    try {
+      await this.auth.signInWithRedirect(provider);
+    } catch (error) {
+      document.getElementById('loginError').textContent = error.message;
+    }
+  }
+
+  async checkRedirectResult() {
+    try {
+      const result = await this.auth.getRedirectResult();
+      if (result && result.user) {
+        // onAuthStateChanged handles the rest
+      }
+    } catch (error) {
+      document.getElementById('loginError').textContent = error.message;
+    }
+  }
+
+  initPhoneAuth() {
+    if (this.recaptchaVerifier) return;
+    this.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
+      size: 'invisible',
+      callback: () => {}
+    });
+  }
+
+  async sendPhoneCode() {
+    const phone = document.getElementById('phoneNumber').value.trim();
+    const errEl = document.getElementById('phoneAuthError');
+    errEl.textContent = '';
+    if (!phone) {
+      errEl.textContent = 'Please enter a phone number with country code.';
+      return;
+    }
+    try {
+      this.initPhoneAuth();
+      this.phoneConfirmationResult = await this.auth.signInWithPhoneNumber(phone, this.recaptchaVerifier);
+      document.getElementById('phoneStep1').classList.add('hidden');
+      document.getElementById('phoneStep2').classList.remove('hidden');
+    } catch (error) {
+      errEl.textContent = error.message;
+      // Reset reCAPTCHA on failure so it can be retried
+      this.recaptchaVerifier = null;
+    }
+  }
+
+  async verifyPhoneCode() {
+    const code = document.getElementById('smsCode').value.trim();
+    const errEl = document.getElementById('phoneAuthError');
+    errEl.textContent = '';
+    if (!code) {
+      errEl.textContent = 'Please enter the code.';
+      return;
+    }
+    try {
+      await this.phoneConfirmationResult.confirm(code);
+      // onAuthStateChanged handles the rest
+    } catch (error) {
+      errEl.textContent = 'Invalid code. Please try again.';
+    }
+  }
 
   async logout() {
     // Clean up listeners

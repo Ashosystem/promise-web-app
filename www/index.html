@@ -56,6 +56,34 @@
         <button type="submit" class="btn btn--primary btn--full-width">Sign Up</button>
         <div id="signupError" class="auth-error"></div>
       </form>
+
+      <!-- Social / Phone Auth -->
+      <div class="auth-divider"><span>or</span></div>
+
+      <button id="googleSignInBtn" class="btn btn--social btn--full-width">
+        <svg width="18" height="18" viewBox="0 0 48 48" style="vertical-align:middle;margin-right:8px"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.2l6.7-6.7C35.7 2.5 30.2 0 24 0 14.6 0 6.6 5.5 2.7 13.5l7.8 6C12.5 13.1 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4.1 7.1-10.1 7.1-17z"/><path fill="#FBBC05" d="M10.5 28.5c-.5-1.5-.8-3.1-.8-4.8s.3-3.3.8-4.8l-7.8-6C1 16.1 0 19.9 0 24s1 7.9 2.7 11.1l7.8-5.6z"/><path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7.5-5.8c-2 1.4-4.6 2.2-7.7 2.2-6.2 0-11.5-3.6-13.5-8.9l-7.8 5.6C6.6 42.5 14.6 48 24 48z"/></svg>
+        Continue with Google
+      </button>
+
+      <!-- Phone Auth -->
+      <div id="phoneAuthSection">
+        <div id="phoneStep1">
+          <div class="form-group" style="margin-top:8px">
+            <input type="tel" id="phoneNumber" class="form-control" placeholder="+44 7700 900000 (include country code)">
+          </div>
+          <button id="sendCodeBtn" type="button" class="btn btn--secondary btn--full-width">Continue with Phone</button>
+          <div id="recaptcha-container"></div>
+        </div>
+        <div id="phoneStep2" class="hidden">
+          <div class="form-group">
+            <label class="form-label">Enter the 6-digit code sent to your phone</label>
+            <input type="text" id="smsCode" class="form-control" placeholder="123456" maxlength="6" inputmode="numeric">
+          </div>
+          <button id="verifyCodeBtn" type="button" class="btn btn--primary btn--full-width">Verify Code</button>
+          <button id="backToPhoneBtn" type="button" class="btn btn--secondary btn--full-width" style="margin-top:6px">Back</button>
+        </div>
+        <div id="phoneAuthError" class="auth-error"></div>
+      </div>
     </div>
   </div>
 
