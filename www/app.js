@@ -1446,7 +1446,7 @@ class FirebasePromiseApp {
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000';
     modal.innerHTML = `
       <div style="background:var(--bg-card,#1e2a3a);border-radius:12px;padding:24px;max-width:400px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.4)">
-        <h3 style="margin:0 0 12px;color:var(--text-primary,#e2e8f0)">Transfer as Payment</h3>
+        <h3 style="margin:0 0 12px;color:var(--text-primary,#e2e8f0)">Transfer Pledge</h3>
         <p style="margin:0 0 16px;font-size:0.9em;color:var(--text-secondary,#94a3b8)">"${promise.content}"</p>
         <select id="poolTransferRecipient" style="width:100%;margin-bottom:16px;padding:8px;border-radius:6px;border:1px solid var(--border,#334155);background:var(--bg-input,#0f172a);color:var(--text-primary,#e2e8f0)">
           <option value="">-- Select recipient --</option>
@@ -2563,7 +2563,7 @@ class FirebasePromiseApp {
       case 'redeemed': return `${ico('✅')}<strong>${who}</strong> redeemed${snippet} · <em>${when}</em>`;
       case 'transferred': {
         const to = entry.to ? ` → ${this.displayName(entry.to)}` : '';
-        return `${ico('💸')}<strong>${who}</strong> transferred${snippet}${to} · <em>${when}</em>`;
+        return `${ico('🤝')}<strong>${who}</strong> transferred${snippet}${to} · <em>${when}</em>`;
       }
       default: return `${ico('📋')}<strong>${who}</strong> ${entry.type}${snippet} · <em>${when}</em>`;
     }
