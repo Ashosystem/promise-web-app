@@ -316,7 +316,7 @@ class FirebasePromiseApp {
         await this.signInWithGoogleNative();
       } else {
         const provider = new firebase.auth.GoogleAuthProvider();
-        await this.auth.signInWithPopup(provider);
+        await this.auth.signInWithRedirect(provider);
       }
       // onAuthStateChanged handles the rest
     } catch (error) {
