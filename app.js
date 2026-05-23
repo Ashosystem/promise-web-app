@@ -453,16 +453,20 @@ class FirebasePromiseApp {
       }
     }
 
-    // Manual fallback: prompt for password if we don't have one yet but encrypted key exists
+    // Manual fallback: prompt for password / passphrase if we don't have one yet but encrypted key exists
     if (!storedSecretKey && doc.data().encryptedSecretKey) {
-      const password = prompt('Enter your account password to decrypt your promises on this device:');
-      if (password) {
+      const isGoogle = this.isGoogleUser();
+      const promptText = isGoogle
+        ? 'Enter your recovery passphrase to decrypt your promises on this device:'
+        : 'Enter your account password to decrypt your promises on this device:';
+      const secret = prompt(promptText);
+      if (secret) {
         try {
-          storedSecretKey = await this.recoverSecretKeyFromPassword(password);
+          storedSecretKey = await this.recoverSecretKeyFromPassword(secret);
           this.storeSecretKeyLocally(storedSecretKey);
         } catch (error) {
           console.error('Failed to recover key:', error);
-          alert('Could not recover encryption key. Wrong password?');
+          alert(isGoogle ? 'Wrong passphrase, or no recovery passphrase was set on this account.' : 'Could not recover encryption key. Wrong password?');
         }
       }
     }
@@ -515,6 +519,46 @@ class FirebasePromiseApp {
     }
   }
 
+
+  isGoogleUser() {
+    return !!(this.currentUser && this.currentUser.providerData && this.currentUser.providerData.some(p => p.providerId === 'google.com'));
+  }
+
+  async setupRecoveryPassphrase() {
+    if (!this.myKeyPair || !this.myKeyPair.secretKey) {
+      this.showToast('Cannot set up recovery: encryption keys not loaded.', 'error');
+      return;
+    }
+    const userDoc = await this.db.collection('users').doc(this.currentUser.uid).get();
+    if (userDoc.data() && userDoc.data().encryptedSecretKey) {
+      const overwrite = confirm('A recovery passphrase is already set. Replacing it will not lose access to your promises, but old recovery codes will stop working. Continue?');
+      if (!overwrite) return;
+    }
+    const passphrase = prompt('Choose a recovery passphrase (8+ characters). You will use this to sign in on other devices. WRITE IT DOWN — there is no way to recover it if lost.');
+    if (!passphrase) return;
+    if (passphrase.length < 8) { this.showToast('Passphrase must be at least 8 characters.', 'error'); return; }
+    const confirmPhrase = prompt('Re-enter the passphrase to confirm:');
+    if (passphrase !== confirmPhrase) { this.showToast('Passphrases did not match.', 'error'); return; }
+    try {
+      const secretKeyBase64 = nacl.util.encodeBase64(this.myKeyPair.secretKey);
+      await this.encryptAndStoreSecretKey(secretKeyBase64, passphrase);
+      this.showToast('Recovery passphrase set. You can now sign in on any device.', 'success');
+      this.updateRecoveryButton();
+    } catch (e) {
+      console.error(e);
+      this.showToast('Failed to set recovery passphrase.', 'error');
+    }
+  }
+
+  async updateRecoveryButton() {
+    const btn = document.getElementById('setupPassphraseBtn');
+    if (!btn || !this.currentUser) return;
+    try {
+      const doc = await this.db.collection('users').doc(this.currentUser.uid).get();
+      const hasRecovery = !!(doc.data() && doc.data().encryptedSecretKey);
+      btn.textContent = hasRecovery ? 'Change recovery passphrase' : 'Set up cross-device recovery';
+    } catch (e) { /* non-fatal */ }
+  }
 
   storeSecretKeyLocally(secretKeyBase64) {
     // In production: encrypt this with the user's password using a KDF
@@ -688,6 +732,19 @@ class FirebasePromiseApp {
         // Load encryption keys
         await this.loadEncryptionKeys();
         await this.checkPendingInvites();
+        // Nudge Google users to set a recovery passphrase if they don't have one yet
+        if (this.isGoogleUser() && this.myKeyPair) {
+          const u = await this.db.collection('users').doc(this.currentUser.uid).get();
+          if (!u.data().encryptedSecretKey && !localStorage.getItem(`recoveryPromptDismissed_${this.currentUser.uid}`)) {
+            setTimeout(() => {
+              if (confirm('Set up a recovery passphrase now so you can sign in on other devices? You can also do this later from Settings.')) {
+                this.setupRecoveryPassphrase();
+              } else {
+                localStorage.setItem(`recoveryPromptDismissed_${this.currentUser.uid}`, '1');
+              }
+            }, 1200);
+          }
+        }
       } catch (error) {
         console.error('Error loading user profile:', error);
       }
@@ -1327,6 +1384,7 @@ class FirebasePromiseApp {
     if (isHidden) {
       const input = document.getElementById('usernameInput');
       if (input && this.currentUsername) input.value = this.currentUsername;
+      this.updateRecoveryButton();
     }
   }
 
