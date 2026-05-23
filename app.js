@@ -841,6 +841,9 @@ class FirebasePromiseApp {
           joinedAt: new Date().toISOString(),
           createdByMe: true
         });
+      this.db.collection('pools').doc(poolId).collection('activity').add({
+        type: 'created', by: this.currentUser.email, poolName: name, timestamp: new Date().toISOString()
+      }).catch(() => {});
       nameInput.value = '';
       this.showToast(`Created pool "${name}" — ID: ${poolId}`, 'success');
       this.addActivity(`Created pool "${name}" (id: ${poolId})`);
@@ -873,6 +876,9 @@ class FirebasePromiseApp {
           name: poolName,
           joinedAt: new Date().toISOString()
         });
+      this.db.collection('pools').doc(poolId).collection('activity').add({
+        type: 'joined', by: this.currentUser.email, timestamp: new Date().toISOString()
+      }).catch(() => {});
       poolIdInput.value = '';
       poolNameInput.value = '';
       this.showToast(`Joined pool "${poolName}"`, 'success');
@@ -885,6 +891,9 @@ class FirebasePromiseApp {
 
   async leavePool(poolId) {
     try {
+      this.db.collection('pools').doc(poolId).collection('activity').add({
+        type: 'left', by: this.currentUser.email, timestamp: new Date().toISOString()
+      }).catch(() => {});
       await this.db.collection('users')
         .doc(this.currentUser.uid)
         .collection('pools')
@@ -989,6 +998,8 @@ class FirebasePromiseApp {
             content: content,
             senderId: this.currentUser.uid,
             senderEmail: this.currentUser.email,
+            originalCreatorId: this.currentUser.uid,
+            originalCreatorEmail: this.currentUser.email,
             status: locked ? 'locked' : 'active',
             locked: locked,
             expiresAt: expiration ? new Date(expiration).toISOString() : null,
@@ -1005,6 +1016,10 @@ class FirebasePromiseApp {
             }
             await batch.commit();
           }
+          this.db.collection('pools').doc(poolId).collection('activity').add({
+            type: 'posted', by: this.currentUser.email, content: content,
+            quantity: quantity, timestamp: new Date().toISOString()
+          }).catch(() => {});
           this.showToast(`Posted to pool "${poolTemplate.poolName}"`, 'success');
           this.addActivity(`Posted ${quantity} promise(s) to pool "${poolTemplate.poolName}"`);
           document.getElementById('createPromiseForm').reset();
@@ -1082,6 +1097,8 @@ class FirebasePromiseApp {
           contentEncryptedForSender: encryptedForSender,
           senderId: this.currentUser.uid,
           senderEmail: this.currentUser.email,
+          originalCreatorId: this.currentUser.uid,
+          originalCreatorEmail: this.currentUser.email,
           receiverId: receiverId,
           receiverEmail: receiverEmail,
           status: locked ? 'locked' : 'active',
@@ -1256,6 +1273,13 @@ class FirebasePromiseApp {
     return username ? `@${username}` : email;
   }
 
+  originalCreator(promise) {
+    return promise.originalCreatorEmail
+      || promise.transferredFromEmail
+      || promise.senderEmail
+      || '';
+  }
+
   toggleSettings() {
     const panel = document.getElementById('settingsPanel');
     if (!panel) return;
@@ -1344,6 +1368,8 @@ class FirebasePromiseApp {
         content: plainContent,
         senderEmail: this.currentUser.email,
         senderId: this.currentUser.uid,
+        originalCreatorEmail: promise.originalCreatorEmail || promise.senderEmail,
+        originalCreatorId: promise.originalCreatorId || promise.senderId,
         status: 'active',
         createdAt: now,
         transferredFrom: promiseId,
@@ -1454,6 +1480,8 @@ class FirebasePromiseApp {
       batch.set(this.db.collection('promises').doc(), {
         senderId: this.currentUser.uid,
         senderEmail: this.currentUser.email,
+        originalCreatorEmail: promise.originalCreatorEmail || promise.senderEmail,
+        originalCreatorId: promise.originalCreatorId || promise.senderId,
         receiverId: recipientDoc.id,
         receiverEmail: recipientEmail,
         contentEncryptedForReceiver: encryptedForRecipient,
@@ -2119,6 +2147,7 @@ class FirebasePromiseApp {
           <div class="promise-content">${content}</div>
 
           <div class="promise-meta">
+            <div><strong>Created by:</strong> ${this.displayName(this.originalCreator(promise))} <span style="font-size:11px;color:var(--color-text-secondary);" title="Promises remain redeemable against their original creator">🔐</span></div>
             <div><strong>${isInbox ? 'From' : 'To'}:</strong> ${this.displayName(isInbox ? promise.senderEmail : promise.receiverEmail)}</div>
             <div><strong>Created:</strong> ${createdDate}</div>
             ${promise.expiresAt ? `<div><strong>Expires:</strong> ${new Date(promise.expiresAt).toLocaleDateString()}</div>` : ''}
@@ -2154,20 +2183,27 @@ class FirebasePromiseApp {
         const cards = poolPromises.length === 0
           ? `<div class="empty-state"><p>No active promises in this pool yet</p></div>`
           : poolPromises.map(p => this.renderPoolPromiseCard(p)).join('');
+        const tabBtnBase = 'background:none;border:none;cursor:pointer;padding:8px 16px;font-size:14px;transition:color 0.15s;';
+        const pid = pool.id;
         return `
           <div class="pool-section" style="margin-bottom: var(--space-24);">
             <div class="pool-header" style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-12);background:var(--color-surface);border-radius:8px 8px 0 0;border:1px solid var(--color-border);border-bottom:none;">
               <div>
                 <strong>📢 ${pool.name}</strong>
-                <div style="font-size:12px;color:var(--color-text-secondary);">id: ${pool.id} · ${poolPromises.length} active</div>
+                <div style="font-size:12px;color:var(--color-text-secondary);">id: ${pid} · ${poolPromises.length} active</div>
               </div>
-              <button onclick="app.leavePool('${pool.id}')" class="btn btn--sm btn--secondary">Leave</button>
+              <button onclick="app.leavePool('${pid}')" class="btn btn--sm btn--secondary">Leave</button>
             </div>
             <div style="display:flex;gap:8px;padding:8px var(--space-12);background:var(--color-surface);border:1px solid var(--color-border);border-top:none;border-bottom:none;">
-              <input type="email" id="inviteInput-${pool.id}" placeholder="Invite by email" class="form-control" style="flex:1;font-size:13px;">
-              <button onclick="app.inviteToPool('${pool.id}', '${pool.name.replace(/'/g, "\\'")}', document.getElementById('inviteInput-${pool.id}').value.trim()); document.getElementById('inviteInput-${pool.id}').value='';" class="btn btn--sm btn--primary">Invite</button>
+              <input type="email" id="inviteInput-${pid}" placeholder="Invite by email" class="form-control" style="flex:1;font-size:13px;">
+              <button onclick="app.inviteToPool('${pid}', '${pool.name.replace(/'/g, "\\'")}', document.getElementById('inviteInput-${pid}').value.trim()); document.getElementById('inviteInput-${pid}').value='';" class="btn btn--sm btn--primary">Invite</button>
             </div>
-            <div class="pool-promises" style="padding-top:var(--space-12);border:1px solid var(--color-border);border-top:none;border-radius:0 0 8px 8px;padding:var(--space-12);">${cards}</div>
+            <div style="display:flex;background:var(--color-surface);border:1px solid var(--color-border);border-top:none;border-bottom:none;">
+              <button id="pool-tabbtn-promises-${pid}" onclick="app.switchPoolTab('${pid}','promises')" style="${tabBtnBase}border-bottom:2px solid var(--color-primary,#6366f1);color:var(--color-primary,#6366f1);font-weight:600;">Promises</button>
+              <button id="pool-tabbtn-activity-${pid}" onclick="app.switchPoolTab('${pid}','activity')" style="${tabBtnBase}border-bottom:2px solid transparent;color:var(--color-text-secondary);">Activity</button>
+            </div>
+            <div id="pool-tab-promises-${pid}" style="border:1px solid var(--color-border);border-top:none;border-radius:0 0 8px 8px;padding:var(--space-12);">${cards}</div>
+            <div id="pool-tab-activity-${pid}" style="display:none;border:1px solid var(--color-border);border-top:none;border-radius:0 0 8px 8px;padding:var(--space-12);"></div>
           </div>
         `;
       }).join('');
@@ -2187,7 +2223,8 @@ class FirebasePromiseApp {
           </div>
           <div class="promise-content">${content}</div>
           <div class="promise-meta">
-            <div><strong>From:</strong> ${this.displayName(promise.senderEmail)}</div>
+            <div><strong>Created by:</strong> ${this.displayName(this.originalCreator(promise))} <span style="font-size:11px;color:var(--color-text-secondary);" title="Promises remain redeemable against their original creator">🔐</span></div>
+            ${promise.senderEmail !== this.originalCreator(promise) ? `<div><strong>Posted by:</strong> ${this.displayName(promise.senderEmail)}</div>` : `<div><strong>From:</strong> ${this.displayName(promise.senderEmail)}</div>`}
             <div><strong>Created:</strong> ${createdDate}</div>
             ${promise.expiresAt ? `<div><strong>Expires:</strong> ${new Date(promise.expiresAt).toLocaleDateString()}</div>` : ''}
           </div>
@@ -2345,6 +2382,85 @@ class FirebasePromiseApp {
   // Live promise: neither redeemed, transferred, nor expired (this is what Inbox/Outbox show)
   isActive(promise) {
     return promise.status !== 'redeemed' && promise.status !== 'transferred' && !this.isExpired(promise);
+  }
+
+  relativeTime(isoString) {
+    const diff = Date.now() - new Date(isoString).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 2) return 'just now';
+    if (mins < 60) return `${mins} minutes ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+    const days = Math.floor(hours / 24);
+    if (days === 1) return 'yesterday';
+    if (days < 7) return `${days} days ago`;
+    return new Date(isoString).toLocaleDateString();
+  }
+
+  formatActivityEntry(entry) {
+    const who = this.displayName(entry.by);
+    const when = this.relativeTime(entry.timestamp);
+    const snippet = entry.content ? ` "${entry.content.slice(0, 50)}${entry.content.length > 50 ? '…' : ''}"` : '';
+    switch (entry.type) {
+      case 'created':  return `🎉 <strong>${who}</strong> created this pool · <em>${when}</em>`;
+      case 'joined':   return `👋 <strong>${who}</strong> joined · <em>${when}</em>`;
+      case 'left':     return `🚪 <strong>${who}</strong> left · <em>${when}</em>`;
+      case 'posted': {
+        const qty = entry.quantity > 1 ? ` (×${entry.quantity})` : '';
+        return `📤 <strong>${who}</strong> posted${snippet}${qty} · <em>${when}</em>`;
+      }
+      case 'redeemed': return `✅ <strong>${who}</strong> redeemed${snippet} · <em>${when}</em>`;
+      case 'transferred': {
+        const to = entry.to ? ` → ${this.displayName(entry.to)}` : '';
+        return `↗️ <strong>${who}</strong> transferred${snippet}${to} · <em>${when}</em>`;
+      }
+      default: return `📋 <strong>${who}</strong> ${entry.type}${snippet} · <em>${when}</em>`;
+    }
+  }
+
+  async loadPoolActivity(poolId) {
+    const panel = document.getElementById(`pool-tab-activity-${poolId}`);
+    if (!panel) return;
+    panel.innerHTML = '<p style="color:var(--color-text-secondary);padding:12px">Loading activity…</p>';
+    try {
+      const snap = await this.db.collection('pools').doc(poolId).collection('activity')
+        .orderBy('timestamp', 'desc').limit(50).get();
+      if (snap.empty) {
+        panel.innerHTML = '<p style="color:var(--color-text-secondary);padding:12px">No activity yet.</p>';
+        return;
+      }
+      panel.innerHTML = snap.docs.map(doc => {
+        const entry = doc.data();
+        return `<div style="padding:10px 0;border-bottom:1px solid var(--color-border);font-size:14px;line-height:1.5">${this.formatActivityEntry(entry)}</div>`;
+      }).join('');
+    } catch (e) {
+      panel.innerHTML = '<p style="color:var(--color-text-secondary);padding:12px">Could not load activity.</p>';
+    }
+  }
+
+  switchPoolTab(poolId, tab) {
+    const promisesPanel = document.getElementById(`pool-tab-promises-${poolId}`);
+    const activityPanel = document.getElementById(`pool-tab-activity-${poolId}`);
+    const promisesBtn = document.getElementById(`pool-tabbtn-promises-${poolId}`);
+    const activityBtn = document.getElementById(`pool-tabbtn-activity-${poolId}`);
+    if (!promisesPanel || !activityPanel) return;
+    const activeStyle = 'border-bottom:2px solid var(--color-primary,#6366f1);color:var(--color-primary,#6366f1);font-weight:600;';
+    const inactiveStyle = 'border-bottom:2px solid transparent;color:var(--color-text-secondary);font-weight:400;';
+    if (tab === 'promises') {
+      promisesPanel.style.display = '';
+      activityPanel.style.display = 'none';
+      if (promisesBtn) promisesBtn.style.cssText += activeStyle;
+      if (activityBtn) activityBtn.style.cssText += inactiveStyle;
+    } else {
+      promisesPanel.style.display = 'none';
+      activityPanel.style.display = '';
+      if (promisesBtn) promisesBtn.style.cssText += inactiveStyle;
+      if (activityBtn) activityBtn.style.cssText += activeStyle;
+      if (!activityPanel.dataset.loaded) {
+        activityPanel.dataset.loaded = '1';
+        this.loadPoolActivity(poolId);
+      }
+    }
   }
 
   addActivity(message) {
