@@ -128,6 +128,11 @@
                           <span>Network</span>
                           <span class="badge" id="networkBadge"></span>
                       </button>
+                      <button class="nav-item" data-tab="pools">
+                          <span class="nav-icon">📢</span>
+                          <span>Pools</span>
+                          <span class="badge" id="poolsBadge"></span>
+                      </button>
                         <div class="nav-item" data-tab="transfer">
                         <span class="nav-icon">📤</span>
                         <span class="nav-label">Transfer</span>
@@ -350,6 +355,44 @@
                         </div>
 
 
+
+                      <!-- Pools Tab -->
+                      <div id="pools" class="tab-pane">
+                          <div class="content-header">
+                              <h2>Pools</h2>
+                              <p>Join public pools to send and see promises broadcast to the whole pool. Pool promises are public (no encryption).</p>
+                          </div>
+
+                          <form id="createPoolForm" class="form add-contact-form" style="margin-bottom:var(--space-16);">
+                              <div class="form-group">
+                                  <label class="form-label" for="createPoolName">Create a Pool</label>
+                                  <div class="input-group" style="display:flex;gap:8px;flex-wrap:wrap;">
+                                      <input type="text" id="createPoolName" class="form-control" placeholder="Pool name (e.g. Bristol Bakers)" required style="flex:1;min-width:200px;">
+                                      <button type="submit" class="btn btn--primary">Create</button>
+                                  </div>
+                                  <small class="form-hint">A shareable pool ID is generated from the name. Send the ID to anyone you want to join.</small>
+                              </div>
+                          </form>
+
+                          <form id="joinPoolForm" class="form add-contact-form">
+                              <div class="form-group">
+                                  <label class="form-label" for="joinPoolId">Join a Pool</label>
+                                  <div class="input-group" style="display:flex;gap:8px;flex-wrap:wrap;">
+                                      <input type="text" id="joinPoolId" class="form-control" placeholder="Pool ID (e.g. bristol-bakers)" required style="flex:1;min-width:160px;">
+                                      <input type="text" id="joinPoolName" class="form-control" placeholder="Display name (optional)" style="flex:1;min-width:160px;">
+                                      <button type="submit" class="btn btn--primary">Join</button>
+                                  </div>
+                                  <small class="form-hint">Anyone with the pool ID can join. All members see all posts in the pool.</small>
+                              </div>
+                          </form>
+
+                          <h3>Your Pools</h3>
+                          <div class="promises-container" id="poolsList">
+                              <div class="empty-state">
+                                  <p>📢 You haven't joined any pools yet</p>
+                              </div>
+                          </div>
+                      </div>
 
                       <!-- Network (Contacts) Tab -->
                       <div id="contacts" class="tab-pane">

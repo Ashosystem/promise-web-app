@@ -71,6 +71,9 @@ class FirebasePromiseApp {
     this.currentUserDoc = null;
     this.promises = new Map();
     this.contacts = new Map();
+    this.myPools = new Map();
+    this.poolUnsubscribers = new Map();
+    this.selectedPoolId = null;
     this.activities = [];
 
     // Encryption
@@ -542,6 +545,10 @@ class FirebasePromiseApp {
     }
 
         decryptPromiseContent(promise) {
+            // Pool promises are plaintext — no decryption needed
+            if (promise.isPoolPromise) {
+                return promise.content || '[No content]';
+            }
             // Check if keys are still loading
             if (this.keysLoading) {
                 return '[Loading decryption keys...]';
@@ -692,7 +699,143 @@ class FirebasePromiseApp {
       });
     this.unsubscribers.push(contactsUnsub);
 
+    // Listen to my joined pools
+    console.log('Attaching pools listener...');
+    const poolsUnsub = this.db.collection('users')
+      .doc(this.currentUser.uid)
+      .collection('pools')
+      .onSnapshot((snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          const poolId = change.doc.id;
+          const data = { id: poolId, ...change.doc.data() };
+          if (change.type === 'added' || change.type === 'modified') {
+            this.myPools.set(poolId, data);
+            if (!this.poolUnsubscribers.has(poolId)) {
+              this.attachPoolPromiseListener(poolId);
+            }
+          } else if (change.type === 'removed') {
+            this.myPools.delete(poolId);
+            const unsub = this.poolUnsubscribers.get(poolId);
+            if (unsub) { unsub(); this.poolUnsubscribers.delete(poolId); }
+            // Drop pool promises from local cache
+            for (const [pid, p] of this.promises) {
+              if (p.poolId === poolId) this.promises.delete(pid);
+            }
+          }
+        });
+        this.updateUI();
+      });
+    this.unsubscribers.push(poolsUnsub);
+
     console.log('All listeners attached');
+  }
+
+  attachPoolPromiseListener(poolId) {
+    const unsub = this.db.collection('promises')
+      .where('poolId', '==', poolId)
+      .onSnapshot((snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          const promiseData = { id: change.doc.id, ...change.doc.data() };
+          if (change.type === 'added' || change.type === 'modified') {
+            this.promises.set(promiseData.id, promiseData);
+          } else if (change.type === 'removed') {
+            this.promises.delete(promiseData.id);
+          }
+        });
+        this.updateUI();
+      });
+    this.poolUnsubscribers.set(poolId, unsub);
+  }
+
+  async createPool() {
+    const nameInput = document.getElementById('createPoolName');
+    const name = nameInput.value.trim();
+    if (!name) {
+      this.showToast('Please enter a pool name', 'error');
+      return;
+    }
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'pool';
+    const suffix = Math.random().toString(36).slice(2, 7);
+    const poolId = `${slug}-${suffix}`;
+    try {
+      // Best-effort top-level pool registry (for future discovery / metadata).
+      // Non-fatal if rules disallow it — joining still works via the user's subcollection.
+      try {
+        await this.db.collection('pools').doc(poolId).set({
+          poolId: poolId,
+          name: name,
+          createdBy: this.currentUser.uid,
+          createdByEmail: this.currentUser.email,
+          createdAt: new Date().toISOString()
+        });
+      } catch (e) {
+        console.warn('Top-level pool registry write failed (non-fatal):', e);
+      }
+      await this.db.collection('users')
+        .doc(this.currentUser.uid)
+        .collection('pools')
+        .doc(poolId)
+        .set({
+          poolId: poolId,
+          name: name,
+          joinedAt: new Date().toISOString(),
+          createdByMe: true
+        });
+      nameInput.value = '';
+      this.showToast(`Created pool "${name}" — ID: ${poolId}`, 'success');
+      this.addActivity(`Created pool "${name}" (id: ${poolId})`);
+      // Copy ID to clipboard for easy sharing
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(poolId).catch(() => {});
+      }
+    } catch (error) {
+      console.error('Failed to create pool:', error);
+      this.showToast('Failed to create pool', 'error');
+    }
+  }
+
+  async joinPool() {
+    const poolIdInput = document.getElementById('joinPoolId');
+    const poolNameInput = document.getElementById('joinPoolName');
+    const poolId = poolIdInput.value.trim();
+    const poolName = (poolNameInput.value || poolId).trim();
+    if (!poolId) {
+      this.showToast('Please enter a pool ID', 'error');
+      return;
+    }
+    try {
+      await this.db.collection('users')
+        .doc(this.currentUser.uid)
+        .collection('pools')
+        .doc(poolId)
+        .set({
+          poolId: poolId,
+          name: poolName,
+          joinedAt: new Date().toISOString()
+        });
+      poolIdInput.value = '';
+      poolNameInput.value = '';
+      this.showToast(`Joined pool "${poolName}"`, 'success');
+      this.addActivity(`Joined pool "${poolName}"`);
+    } catch (error) {
+      console.error('Failed to join pool:', error);
+      this.showToast('Failed to join pool', 'error');
+    }
+  }
+
+  async leavePool(poolId) {
+    try {
+      await this.db.collection('users')
+        .doc(this.currentUser.uid)
+        .collection('pools')
+        .doc(poolId)
+        .delete();
+      this.showToast('Left pool', 'success');
+      this.addActivity(`Left pool "${poolId}"`);
+    } catch (error) {
+      console.error('Failed to leave pool:', error);
+      this.showToast('Failed to leave pool', 'error');
+    }
   }
 
   // ===== PROMISE OPERATIONS =====
@@ -704,18 +847,70 @@ class FirebasePromiseApp {
       const locked = document.getElementById('promiseLock').checked;
       const quantity = parseInt(document.getElementById('promiseQuantity').value) || 1;
 
-      if (!content || !receiverEmail) {
+      if (!content) {
+        this.showToast('Please fill in all required fields', 'error');
+        return;
+      }
+
+      if (quantity < 1 || quantity > 1000) {
+        this.showToast('Quantity must be between 1 and 1000', 'error');
+        return;
+      }
+
+      // POOL BRANCH: pool promises are plaintext, addressed to a pool not a user
+      if (this.selectedPoolId) {
+        const poolId = this.selectedPoolId;
+        const pool = this.myPools.get(poolId);
+        this.showLoading();
+        try {
+          const poolTemplate = {
+            poolId: poolId,
+            poolName: pool ? pool.name : poolId,
+            isPoolPromise: true,
+            content: content,
+            senderId: this.currentUser.uid,
+            senderEmail: this.currentUser.email,
+            status: locked ? 'locked' : 'active',
+            locked: locked,
+            expiresAt: expiration ? new Date(expiration).toISOString() : null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          };
+          if (quantity === 1) {
+            await this.db.collection('promises').add(poolTemplate);
+          } else {
+            const batch = this.db.batch();
+            for (let i = 0; i < quantity; i++) {
+              const docRef = this.db.collection('promises').doc();
+              batch.set(docRef, poolTemplate);
+            }
+            await batch.commit();
+          }
+          this.showToast(`Posted to pool "${poolTemplate.poolName}"`, 'success');
+          this.addActivity(`Posted ${quantity} promise(s) to pool "${poolTemplate.poolName}"`);
+          document.getElementById('createPromiseForm').reset();
+          this.selectedPoolId = null;
+          const ri = document.getElementById('promiseReceiver');
+          if (ri) {
+            ri.disabled = false;
+            ri.placeholder = 'Type an email, or pick a contact below...';
+          }
+        } catch (error) {
+          console.error('Pool promise error:', error);
+          this.showToast('Failed to post pool promise', 'error');
+        } finally {
+          this.hideLoading();
+        }
+        return;
+      }
+
+      if (!receiverEmail) {
         this.showToast('Please fill in all required fields', 'error');
         return;
       }
 
       if (!this.isValidEmail(receiverEmail)) {
         this.showToast('Please enter a valid email address for the recipient', 'error');
-        return;
-      }
-
-      if (quantity < 1 || quantity > 1000) {
-        this.showToast('Quantity must be between 1 and 1000', 'error');
         return;
       }
 
@@ -1158,11 +1353,39 @@ class FirebasePromiseApp {
 
             // "Choose an existing contact" dropdown fills the typeable recipient input
             const receiverSelect = document.getElementById('promiseReceiverSelect');
+            const receiverInput = document.getElementById('promiseReceiver');
             if (receiverSelect) {
                 receiverSelect.addEventListener('change', (e) => {
-                    if (e.target.value) {
-                        document.getElementById('promiseReceiver').value = e.target.value;
+                    const val = e.target.value;
+                    if (!val) {
+                        this.selectedPoolId = null;
+                        if (receiverInput) {
+                            receiverInput.disabled = false;
+                            receiverInput.placeholder = 'Type an email, or pick a contact below...';
+                        }
+                        return;
                     }
+                    if (val.startsWith('pool:')) {
+                        this.selectedPoolId = val.slice(5);
+                        const pool = this.myPools.get(this.selectedPoolId);
+                        if (receiverInput) {
+                            receiverInput.value = '';
+                            receiverInput.disabled = true;
+                            receiverInput.placeholder = `📢 Posting to pool "${pool ? pool.name : this.selectedPoolId}" (public)`;
+                        }
+                    } else {
+                        this.selectedPoolId = null;
+                        if (receiverInput) {
+                            receiverInput.disabled = false;
+                            receiverInput.value = val;
+                            receiverInput.placeholder = 'Type an email, or pick a contact below...';
+                        }
+                    }
+                });
+            }
+            if (receiverInput) {
+                receiverInput.addEventListener('input', () => {
+                    if (receiverInput.value) this.selectedPoolId = null;
                 });
             }
 
@@ -1171,6 +1394,22 @@ class FirebasePromiseApp {
                 transferForm.addEventListener('submit', (e) => {
                     e.preventDefault();
                     this.transferPromise();
+                });
+            }
+
+            const createPoolForm = document.getElementById('createPoolForm');
+            if (createPoolForm) {
+                createPoolForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    this.createPool();
+                });
+            }
+
+            const joinPoolForm = document.getElementById('joinPoolForm');
+            if (joinPoolForm) {
+                joinPoolForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    this.joinPool();
                 });
             }
 
@@ -1257,6 +1496,9 @@ class FirebasePromiseApp {
         case 'contacts':
           this.updateContactsList();
           break;
+        case 'pools':
+          this.updatePoolsView();
+          break;
       }
     }
 
@@ -1321,6 +1563,9 @@ class FirebasePromiseApp {
         case 'contacts':
           this.updateContactsList();
           break;
+        case 'pools':
+          this.updatePoolsView();
+          break;
       }
 
       this.updateBadges();
@@ -1351,17 +1596,22 @@ class FirebasePromiseApp {
           // Count contacts
           const networkCount = this.contacts.size;
 
+          // Pools count
+          const poolsCount = this.myPools.size;
+
           const inboxBadge = document.getElementById('inboxBadge');
           const outboxBadge = document.getElementById('outboxBadge');
           const redeemedBadge = document.getElementById('redeemedBadge');
           const expiredBadge = document.getElementById('expiredBadge');
           const networkBadge = document.getElementById('networkBadge');
+          const poolsBadge = document.getElementById('poolsBadge');
 
           if (inboxBadge) inboxBadge.textContent = inboxCount > 0 ? inboxCount : '';
           if (outboxBadge) outboxBadge.textContent = outboxCount > 0 ? outboxCount : '';
           if (redeemedBadge) redeemedBadge.textContent = redeemedCount > 0 ? redeemedCount : '';
           if (expiredBadge) expiredBadge.textContent = expiredCount > 0 ? expiredCount : '';
           if (networkBadge) networkBadge.textContent = networkCount > 0 ? networkCount : '';
+          if (poolsBadge) poolsBadge.textContent = poolsCount > 0 ? poolsCount : '';
         }
 
     updateInbox() {
@@ -1497,6 +1747,62 @@ class FirebasePromiseApp {
       `;
     }
 
+    updatePoolsView() {
+      const container = document.getElementById('poolsList');
+      if (!container) return;
+      const pools = Array.from(this.myPools.values());
+      if (pools.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <p>📢 You haven't joined any pools yet</p>
+            <small>Join a pool above to see public promises from its members</small>
+          </div>
+        `;
+        return;
+      }
+      container.innerHTML = pools.map(pool => {
+        const poolPromises = Array.from(this.promises.values())
+          .filter(p => p.poolId === pool.id && this.isActive(p))
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        const cards = poolPromises.length === 0
+          ? `<div class="empty-state"><p>No active promises in this pool yet</p></div>`
+          : poolPromises.map(p => this.renderPoolPromiseCard(p)).join('');
+        return `
+          <div class="pool-section" style="margin-bottom: var(--space-24);">
+            <div class="pool-header" style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-12);background:var(--color-bg-secondary,#f5f5f5);border-radius:8px;">
+              <div>
+                <strong>📢 ${pool.name}</strong>
+                <div style="font-size:12px;color:var(--color-text-secondary);">id: ${pool.id} · ${poolPromises.length} active</div>
+              </div>
+              <button onclick="app.leavePool('${pool.id}')" class="btn btn--sm btn--secondary">Leave</button>
+            </div>
+            <div class="pool-promises" style="margin-top:var(--space-12);">${cards}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    renderPoolPromiseCard(promise) {
+      const content = promise.content || '[No content]';
+      const expired = this.isExpired(promise);
+      const statusClass = promise.status === 'redeemed' ? 'redeemed' : (expired ? 'expired' : 'pool');
+      const statusText = promise.status === 'redeemed' ? '✅ Redeemed' : (expired ? '⏰ Expired' : '📢 Pool');
+      const createdDate = new Date(promise.createdAt).toLocaleDateString();
+      return `
+        <div class="promise-card">
+          <div class="promise-header">
+            <span class="promise-status ${statusClass}">${statusText}</span>
+          </div>
+          <div class="promise-content">${content}</div>
+          <div class="promise-meta">
+            <div><strong>From:</strong> ${promise.senderEmail}</div>
+            <div><strong>Created:</strong> ${createdDate}</div>
+            ${promise.expiresAt ? `<div><strong>Expires:</strong> ${new Date(promise.expiresAt).toLocaleDateString()}</div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+
     updateContactsList() {
       const container = document.getElementById('contactsList');
       if (!container) return;
@@ -1593,8 +1899,19 @@ class FirebasePromiseApp {
 
     const select = document.getElementById('promiseReceiverSelect');
     if (select) {
-      select.innerHTML = '<option value="">— or choose an existing contact —</option>' +
-        contacts.map(contact => `<option value="${contact.email}">${contact.email}</option>`).join('');
+      const pools = Array.from(this.myPools.values());
+      let html = '<option value="">— or choose an existing contact or pool —</option>';
+      if (contacts.length > 0) {
+        html += '<optgroup label="Contacts">' +
+          contacts.map(c => `<option value="${c.email}">${c.email}</option>`).join('') +
+          '</optgroup>';
+      }
+      if (pools.length > 0) {
+        html += '<optgroup label="Pools">' +
+          pools.map(p => `<option value="pool:${p.id}">📢 ${p.name}</option>`).join('') +
+          '</optgroup>';
+      }
+      select.innerHTML = html;
     }
   }
 
