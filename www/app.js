@@ -2222,7 +2222,7 @@ class FirebasePromiseApp {
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       const promisesHTML = poolPromises.length === 0
         ? `<div class="empty-state" style="padding:var(--space-24);"><p>No active promises in this pool yet</p></div>`
-        : poolPromises.map(p => this.renderPoolPromiseCard(p)).join('');
+        : `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:var(--space-20);">${poolPromises.map(p => this.renderPoolPromiseCard(p)).join('')}</div>`;
       const safeName = pool.name.replace(/'/g, "\\'");
       const tab = this.poolDetailTab;
       const tabBtn = (key, label) => {
@@ -2230,7 +2230,7 @@ class FirebasePromiseApp {
         return `<button onclick="app.switchPoolDetailTab('${key}')" style="background:none;border:none;cursor:pointer;padding:12px 20px;font-size:14px;border-bottom:2px solid ${active ? 'var(--color-primary,#6366f1)' : 'transparent'};color:${active ? 'var(--color-primary,#6366f1)' : 'var(--color-text-secondary)'};font-weight:${active ? '600' : '400'};">${label}</button>`;
       };
       container.innerHTML = `
-        <div class="pool-detail" style="display:flex;flex-direction:column;min-height:70vh;">
+        <div class="pool-detail" style="grid-column:1 / -1;width:min(75vw,1100px);margin:0 auto;display:flex;flex-direction:column;min-height:75vh;">
           <div style="display:flex;align-items:center;gap:12px;padding:var(--space-12);background:var(--color-surface);border:1px solid var(--color-border);border-radius:8px 8px 0 0;border-bottom:none;">
             <button onclick="app.closePoolDetail()" class="btn btn--sm btn--secondary" style="flex-shrink:0;">← Back</button>
             <div style="flex:1;min-width:0;">
