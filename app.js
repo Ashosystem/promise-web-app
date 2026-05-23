@@ -482,6 +482,7 @@ class FirebasePromiseApp {
       const newSecretKey = nacl.util.encodeBase64(this.myKeyPair.secretKey);
       await userDocRef.update({ publicKey: newPublicKey, secretKey: newSecretKey, updatedAt: new Date().toISOString() });
       this.storeSecretKeyLocally(newSecretKey);
+      if (this.currentUserDoc) this.currentUserDoc.publicKey = newPublicKey;
       this.showToast('New device: open the app on your original device to restore old promises', 'info');
     }
     console.log('Encryption keys loaded');
