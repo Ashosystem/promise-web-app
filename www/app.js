@@ -456,21 +456,24 @@ class FirebasePromiseApp {
       }
     }
 
+    // If not in localStorage, try fetching from Firestore (login = key access)
+    if (!storedSecretKey && doc.data().secretKey) {
+      storedSecretKey = doc.data().secretKey;
+      this.storeSecretKeyLocally(storedSecretKey);
+      console.log('Secret key loaded from Firestore');
+    }
+
     if (storedSecretKey) {
       this.myKeyPair = {
         publicKey: nacl.util.decodeBase64(doc.data().publicKey),
         secretKey: nacl.util.decodeBase64(storedSecretKey)
       };
+      // Backfill: if key was only local, save it to Firestore for cross-device access
+      if (!doc.data().secretKey) {
+        await userDocRef.update({ secretKey: storedSecretKey, updatedAt: new Date().toISOString() });
+      }
     } else {
-      // No key found locally or in Firestore — generate a new key pair for this device.
-      // Old promises encrypted with the previous key won't decrypt, but new ones will work.
-      console.warn('Secret key not found — generating new key pair for this device.');
-      this.myKeyPair = PromiseEncryption.generateKeyPair();
-      const newPublicKey = nacl.util.encodeBase64(this.myKeyPair.publicKey);
-      const newSecretKey = nacl.util.encodeBase64(this.myKeyPair.secretKey);
-      await userDocRef.update({ publicKey: newPublicKey, updatedAt: new Date().toISOString() });
-      this.storeSecretKeyLocally(newSecretKey);
-      this.showToast('New device detected — existing encrypted promises may not be visible', 'info');
+      console.warn('Secret key not found in localStorage or Firestore.');
     }
     console.log('Encryption keys loaded');
     } catch (error) {
@@ -626,6 +629,7 @@ class FirebasePromiseApp {
 
             await userDocRef.update({
               publicKey: publicKeyBase64,
+              secretKey: secretKeyBase64,
               updatedAt: new Date().toISOString()
             });
 
@@ -641,6 +645,7 @@ class FirebasePromiseApp {
           await userDocRef.set({
             email: this.currentUser.email,
             publicKey: publicKeyBase64,
+            secretKey: secretKeyBase64,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString()
           });
