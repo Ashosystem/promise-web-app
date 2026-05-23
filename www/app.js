@@ -728,6 +728,26 @@ class FirebasePromiseApp {
       });
     this.unsubscribers.push(poolsUnsub);
 
+    // Live invite listener — process pool invites as they arrive without needing a restart
+    const inviteUnsub = this.db.collection('pool-invites')
+      .where('invitedEmail', '==', this.currentUser.email)
+      .onSnapshot(async (snapshot) => {
+        for (const change of snapshot.docChanges()) {
+          if (change.type !== 'added') continue;
+          const { poolId, poolName, invitedByEmail } = change.doc.data();
+          const alreadyJoined = await this.db.collection('users')
+            .doc(this.currentUser.uid).collection('pools').doc(poolId).get();
+          if (!alreadyJoined.exists) {
+            await this.db.collection('users')
+              .doc(this.currentUser.uid).collection('pools').doc(poolId)
+              .set({ poolId, name: poolName, joinedAt: new Date().toISOString(), invitedBy: invitedByEmail });
+            this.showToast(`Joined pool "${poolName}" (invited by ${invitedByEmail})`, 'success');
+          }
+          await change.doc.ref.delete();
+        }
+      });
+    this.unsubscribers.push(inviteUnsub);
+
     console.log('All listeners attached');
   }
 
