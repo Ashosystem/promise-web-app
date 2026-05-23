@@ -1882,7 +1882,7 @@ class FirebasePromiseApp {
             .forEach(contact => {
               const option = document.createElement('option');
               option.value = contact.email;
-              option.textContent = contact.email;
+              option.textContent = this.usernames.get(contact.email) ? `@${this.usernames.get(contact.email)} (${contact.email})` : contact.email;
               transferReceiver.appendChild(option);
             });
 
@@ -2284,7 +2284,10 @@ class FirebasePromiseApp {
       let html = '<option value="">— or choose an existing contact or pool —</option>';
       if (contacts.length > 0) {
         html += '<optgroup label="Contacts">' +
-          contacts.map(c => `<option value="${c.email}">${c.email}</option>`).join('') +
+          contacts.map(c => {
+            const name = this.usernames.get(c.email) ? `@${this.usernames.get(c.email)} (${c.email})` : c.email;
+            return `<option value="${c.email}">${name}</option>`;
+          }).join('') +
           '</optgroup>';
       }
       if (pools.length > 0) {
