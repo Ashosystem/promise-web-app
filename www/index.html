@@ -140,9 +140,16 @@
                   </nav>
 
                   <div class="sidebar-footer">
+                      <div id="settingsPanel" style="display:none;padding:10px 0 6px;">
+                          <input id="usernameInput" type="text" class="form-control" placeholder="choose a username" maxlength="20" style="margin-bottom:6px;" />
+                          <button onclick="app.saveUsername(document.getElementById('usernameInput').value)" class="btn btn--sm btn--primary btn--full-width">Save username</button>
+                      </div>
                       <div class="user-card">
                           <div class="user-email" id="currentAgentKey"></div>
-                          <button id="logoutBtn" class="btn btn--sm btn--secondary btn--full-width">Logout</button>
+                          <div style="display:flex;gap:6px;margin-top:6px;">
+                              <button id="logoutBtn" class="btn btn--sm btn--secondary" style="flex:1">Logout</button>
+                              <button onclick="app.toggleSettings()" class="btn btn--sm btn--secondary" title="Settings">⚙️</button>
+                          </div>
                       </div>
                   </div>
               </aside>
