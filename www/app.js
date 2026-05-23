@@ -473,7 +473,16 @@ class FirebasePromiseApp {
         await userDocRef.update({ secretKey: storedSecretKey, updatedAt: new Date().toISOString() });
       }
     } else {
-      console.warn('Secret key not found in localStorage or Firestore.');
+      // No key found anywhere — generate a new one for this device/login.
+      // Existing promises encrypted with the old key won't decrypt until the user
+      // opens the app on their original device (which will backfill the key to Firestore).
+      console.warn('No secret key found — generating new key pair.');
+      this.myKeyPair = PromiseEncryption.generateKeyPair();
+      const newPublicKey = nacl.util.encodeBase64(this.myKeyPair.publicKey);
+      const newSecretKey = nacl.util.encodeBase64(this.myKeyPair.secretKey);
+      await userDocRef.update({ publicKey: newPublicKey, secretKey: newSecretKey, updatedAt: new Date().toISOString() });
+      this.storeSecretKeyLocally(newSecretKey);
+      this.showToast('New device: open the app on your original device to restore old promises', 'info');
     }
     console.log('Encryption keys loaded');
     } catch (error) {
