@@ -638,6 +638,7 @@ class FirebasePromiseApp {
         }
         // Load encryption keys
         await this.loadEncryptionKeys();
+        await this.checkPendingInvites();
       } catch (error) {
         console.error('Error loading user profile:', error);
       }
@@ -835,6 +836,65 @@ class FirebasePromiseApp {
     } catch (error) {
       console.error('Failed to leave pool:', error);
       this.showToast('Failed to leave pool', 'error');
+    }
+  }
+
+  async inviteToPool(poolId, poolName, email) {
+    if (!email || !this.isValidEmail(email)) {
+      this.showToast('Please enter a valid email', 'error');
+      return;
+    }
+    if (email === this.currentUser.email) {
+      this.showToast("You're already in this pool", 'error');
+      return;
+    }
+    const userQuery = await this.db.collection('users').where('email', '==', email).get();
+    if (userQuery.empty) {
+      this.showToast('No account found for that email', 'error');
+      return;
+    }
+    try {
+      await this.db.collection('pool-invites').add({
+        poolId,
+        poolName,
+        invitedEmail: email,
+        invitedByEmail: this.currentUser.email,
+        createdAt: new Date().toISOString(),
+      });
+      this.showToast(`Invited ${email} to "${poolName}"`, 'success');
+    } catch (error) {
+      console.error('Failed to send pool invite:', error);
+      this.showToast('Failed to send invite', 'error');
+    }
+  }
+
+  async checkPendingInvites() {
+    try {
+      const invites = await this.db.collection('pool-invites')
+        .where('invitedEmail', '==', this.currentUser.email)
+        .get();
+      if (invites.empty) return;
+      const batch = this.db.batch();
+      for (const doc of invites.docs) {
+        const { poolId, poolName, invitedByEmail } = doc.data();
+        const alreadyJoined = await this.db.collection('users')
+          .doc(this.currentUser.uid)
+          .collection('pools')
+          .doc(poolId)
+          .get();
+        if (!alreadyJoined.exists) {
+          await this.db.collection('users')
+            .doc(this.currentUser.uid)
+            .collection('pools')
+            .doc(poolId)
+            .set({ poolId, name: poolName, joinedAt: new Date().toISOString(), invitedBy: invitedByEmail });
+          this.showToast(`Joined pool "${poolName}" (invited by ${invitedByEmail})`, 'success');
+        }
+        batch.delete(doc.ref);
+      }
+      await batch.commit();
+    } catch (error) {
+      console.error('Error checking pool invites:', error);
     }
   }
 
@@ -1775,6 +1835,10 @@ class FirebasePromiseApp {
                 <div style="font-size:12px;color:var(--color-text-secondary);">id: ${pool.id} · ${poolPromises.length} active</div>
               </div>
               <button onclick="app.leavePool('${pool.id}')" class="btn btn--sm btn--secondary">Leave</button>
+            </div>
+            <div style="display:flex;gap:8px;padding:8px var(--space-12);background:var(--color-bg-secondary,#f5f5f5);border-top:1px solid var(--color-border,#e0e0e0);">
+              <input type="email" id="inviteInput-${pool.id}" placeholder="Invite by email" class="form-control" style="flex:1;font-size:13px;">
+              <button onclick="app.inviteToPool('${pool.id}', '${pool.name.replace(/'/g, "\\'")}', document.getElementById('inviteInput-${pool.id}').value.trim()); document.getElementById('inviteInput-${pool.id}').value='';" class="btn btn--sm btn--primary">Invite</button>
             </div>
             <div class="pool-promises" style="margin-top:var(--space-12);">${cards}</div>
           </div>
