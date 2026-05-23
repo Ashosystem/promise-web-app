@@ -2532,24 +2532,40 @@ class FirebasePromiseApp {
     return new Date(isoString).toLocaleDateString();
   }
 
+  formatActivityTime(isoString) {
+    const d = new Date(isoString);
+    const now = new Date();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const sameDay = d.toDateString() === now.toDateString();
+    const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+    const isYesterday = d.toDateString() === yesterday.toDateString();
+    if (sameDay) return `Today ${hh}:${mm}`;
+    if (isYesterday) return `Yesterday ${hh}:${mm}`;
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mo = String(d.getMonth() + 1).padStart(2, '0');
+    return `${dd}/${mo} ${hh}:${mm}`;
+  }
+
   formatActivityEntry(entry) {
     const who = this.displayName(entry.by);
-    const when = this.relativeTime(entry.timestamp);
+    const when = this.formatActivityTime(entry.timestamp);
     const snippet = entry.content ? ` "${entry.content.slice(0, 50)}${entry.content.length > 50 ? '…' : ''}"` : '';
+    const ico = (e) => `<span style="display:inline-block;width:1.4em;font-size:1.1em;">${e}</span>`;
     switch (entry.type) {
-      case 'created':  return `🎉 <strong>${who}</strong> created this pool · <em>${when}</em>`;
-      case 'joined':   return `👋 <strong>${who}</strong> joined · <em>${when}</em>`;
-      case 'left':     return `🚪 <strong>${who}</strong> left · <em>${when}</em>`;
+      case 'created':  return `${ico('🎉')}<strong>${who}</strong> created this pool · <em>${when}</em>`;
+      case 'joined':   return `${ico('👋')}<strong>${who}</strong> joined · <em>${when}</em>`;
+      case 'left':     return `${ico('🚪')}<strong>${who}</strong> left · <em>${when}</em>`;
       case 'posted': {
         const qty = entry.quantity > 1 ? ` (×${entry.quantity})` : '';
-        return `📤 <strong>${who}</strong> posted${snippet}${qty} · <em>${when}</em>`;
+        return `${ico('📝')}<strong>${who}</strong> posted${snippet}${qty} · <em>${when}</em>`;
       }
-      case 'redeemed': return `✅ <strong>${who}</strong> redeemed${snippet} · <em>${when}</em>`;
+      case 'redeemed': return `${ico('✅')}<strong>${who}</strong> redeemed${snippet} · <em>${when}</em>`;
       case 'transferred': {
         const to = entry.to ? ` → ${this.displayName(entry.to)}` : '';
-        return `↗️ <strong>${who}</strong> transferred${snippet}${to} · <em>${when}</em>`;
+        return `${ico('💸')}<strong>${who}</strong> transferred${snippet}${to} · <em>${when}</em>`;
       }
-      default: return `📋 <strong>${who}</strong> ${entry.type}${snippet} · <em>${when}</em>`;
+      default: return `${ico('📋')}<strong>${who}</strong> ${entry.type}${snippet} · <em>${when}</em>`;
     }
   }
 
