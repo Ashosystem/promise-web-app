@@ -1829,18 +1829,18 @@ class FirebasePromiseApp {
           : poolPromises.map(p => this.renderPoolPromiseCard(p)).join('');
         return `
           <div class="pool-section" style="margin-bottom: var(--space-24);">
-            <div class="pool-header" style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-12);background:var(--color-bg-secondary,#f5f5f5);border-radius:8px;">
+            <div class="pool-header" style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-12);background:var(--color-surface);border-radius:8px 8px 0 0;border:1px solid var(--color-border);border-bottom:none;">
               <div>
                 <strong>📢 ${pool.name}</strong>
                 <div style="font-size:12px;color:var(--color-text-secondary);">id: ${pool.id} · ${poolPromises.length} active</div>
               </div>
               <button onclick="app.leavePool('${pool.id}')" class="btn btn--sm btn--secondary">Leave</button>
             </div>
-            <div style="display:flex;gap:8px;padding:8px var(--space-12);background:var(--color-bg-secondary,#f5f5f5);border-top:1px solid var(--color-border,#e0e0e0);">
+            <div style="display:flex;gap:8px;padding:8px var(--space-12);background:var(--color-surface);border:1px solid var(--color-border);border-top:none;border-bottom:none;">
               <input type="email" id="inviteInput-${pool.id}" placeholder="Invite by email" class="form-control" style="flex:1;font-size:13px;">
               <button onclick="app.inviteToPool('${pool.id}', '${pool.name.replace(/'/g, "\\'")}', document.getElementById('inviteInput-${pool.id}').value.trim()); document.getElementById('inviteInput-${pool.id}').value='';" class="btn btn--sm btn--primary">Invite</button>
             </div>
-            <div class="pool-promises" style="margin-top:var(--space-12);">${cards}</div>
+            <div class="pool-promises" style="padding-top:var(--space-12);border:1px solid var(--color-border);border-top:none;border-radius:0 0 8px 8px;padding:var(--space-12);">${cards}</div>
           </div>
         `;
       }).join('');
