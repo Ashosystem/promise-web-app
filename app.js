@@ -207,9 +207,11 @@ class FirebasePromiseApp {
     const password = document.getElementById('loginPassword').value;
 
     try {
+      this._pendingPassword = password;
       await this.auth.signInWithEmailAndPassword(email, password);
-      // onAuthStateChanged will handle the rest
+      // onAuthStateChanged will handle the rest; loadEncryptionKeys consumes _pendingPassword
     } catch (error) {
+      this._pendingPassword = null;
       document.getElementById('loginError').textContent = error.message;
     }
   }
@@ -440,52 +442,70 @@ class FirebasePromiseApp {
     // Try to get secret key from local storage first
     let storedSecretKey = localStorage.getItem(`prometheusSecretKey_${this.currentUser.uid}`);
 
-    // ← ADD THIS BLOCK: If not found locally, try to recover from Firestore with password
+    // If not found locally, try recovery via the password we just used to sign in (no prompt)
+    if (!storedSecretKey && doc.data().encryptedSecretKey && this._pendingPassword) {
+      try {
+        storedSecretKey = await this.recoverSecretKeyFromPassword(this._pendingPassword);
+        this.storeSecretKeyLocally(storedSecretKey);
+        console.log('Secret key recovered using sign-in password');
+      } catch (error) {
+        console.warn('Sign-in password did not decrypt the stored secret key:', error);
+      }
+    }
+
+    // Manual fallback: prompt for password if we don't have one yet but encrypted key exists
     if (!storedSecretKey && doc.data().encryptedSecretKey) {
-      console.log('Secret key not in local storage, attempting recovery from Firestore...');
-      const password = prompt('Enter your password to decrypt messages on this device:');
+      const password = prompt('Enter your account password to decrypt your promises on this device:');
       if (password) {
         try {
           storedSecretKey = await this.recoverSecretKeyFromPassword(password);
-          this.storeSecretKeyLocally(storedSecretKey); // Save for next time
-          console.log('Secret key recovered from password');
+          this.storeSecretKeyLocally(storedSecretKey);
         } catch (error) {
           console.error('Failed to recover key:', error);
           alert('Could not recover encryption key. Wrong password?');
         }
-      } else {
-        console.log('User cancelled password prompt');
       }
     }
 
-    // If not in localStorage, try fetching from Firestore (login = key access)
+    // Legacy fallback: plaintext secret key in Firestore (older accounts)
     if (!storedSecretKey && doc.data().secretKey) {
       storedSecretKey = doc.data().secretKey;
       this.storeSecretKeyLocally(storedSecretKey);
-      console.log('Secret key loaded from Firestore');
+      console.log('Secret key loaded from Firestore plaintext fallback');
     }
+
+    // Capture pending password for backfill, then clear it
+    const passwordForBackfill = this._pendingPassword;
+    this._pendingPassword = null;
 
     if (storedSecretKey) {
       this.myKeyPair = {
         publicKey: nacl.util.decodeBase64(doc.data().publicKey),
         secretKey: nacl.util.decodeBase64(storedSecretKey)
       };
-      // Backfill: if key was only local, save it to Firestore for cross-device access
+      // Backfill: if plaintext key was missing from Firestore, save it so other devices can decrypt
       if (!doc.data().secretKey) {
         await userDocRef.update({ secretKey: storedSecretKey, updatedAt: new Date().toISOString() });
       }
+      // Backfill: if encrypted key is missing and we have the password, store it for proper cross-device recovery
+      if (!doc.data().encryptedSecretKey && passwordForBackfill) {
+        try { await this.encryptAndStoreSecretKey(storedSecretKey, passwordForBackfill); } catch (e) { console.warn('encrypt+store backfill failed', e); }
+      }
+    } else if (doc.data().publicKey) {
+      // We have a public key but no secret key — DO NOT rotate. Past promises stay encrypted.
+      // Surface a clear message instead of silently destroying the keypair.
+      console.warn('No secret key available — entering read-only encrypted mode');
+      this.myKeyPair = null;
+      this.showToast('Cannot decrypt your promises on this device — wrong password or no encrypted key on file. Sign in on the original device (the one you signed up on) to restore.', 'error');
     } else {
-      // No key found anywhere — generate a new one for this device/login.
-      // Existing promises encrypted with the old key won't decrypt until the user
-      // opens the app on their original device (which will backfill the key to Firestore).
-      console.warn('No secret key found — generating new key pair.');
+      // Brand new account — no keys at all. Generate fresh pair (safe; no past data exists).
+      console.log('First-time keypair generation for new account');
       this.myKeyPair = PromiseEncryption.generateKeyPair();
       const newPublicKey = nacl.util.encodeBase64(this.myKeyPair.publicKey);
       const newSecretKey = nacl.util.encodeBase64(this.myKeyPair.secretKey);
       await userDocRef.update({ publicKey: newPublicKey, secretKey: newSecretKey, updatedAt: new Date().toISOString() });
       this.storeSecretKeyLocally(newSecretKey);
       if (this.currentUserDoc) this.currentUserDoc.publicKey = newPublicKey;
-      this.showToast('New device: open the app on your original device to restore old promises', 'info');
     }
     console.log('Encryption keys loaded');
     } catch (error) {
