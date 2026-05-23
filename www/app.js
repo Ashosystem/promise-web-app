@@ -782,6 +782,10 @@ class FirebasePromiseApp {
             await this.db.collection('users')
               .doc(this.currentUser.uid).collection('pools').doc(poolId)
               .set({ poolId, name: poolName, joinedAt: new Date().toISOString(), invitedBy: invitedByEmail });
+            this.db.collection('pools').doc(poolId).collection('activity').add({
+              type: 'joined', by: this.currentUser.email, via: 'invite', invitedBy: invitedByEmail,
+              timestamp: new Date().toISOString()
+            }).catch(e => console.warn('activity write failed:', e));
             this.showToast(`Joined pool "${poolName}" (invited by ${invitedByEmail})`, 'success');
           }
           await change.doc.ref.delete();
@@ -845,7 +849,7 @@ class FirebasePromiseApp {
         });
       this.db.collection('pools').doc(poolId).collection('activity').add({
         type: 'created', by: this.currentUser.email, poolName: name, timestamp: new Date().toISOString()
-      }).catch(() => {});
+      }).catch(e => console.warn('pool activity write failed:', e));
       nameInput.value = '';
       this.showToast(`Created pool "${name}" — ID: ${poolId}`, 'success');
       this.addActivity(`Created pool "${name}" (id: ${poolId})`);
@@ -880,7 +884,7 @@ class FirebasePromiseApp {
         });
       this.db.collection('pools').doc(poolId).collection('activity').add({
         type: 'joined', by: this.currentUser.email, timestamp: new Date().toISOString()
-      }).catch(() => {});
+      }).catch(e => console.warn('pool activity write failed:', e));
       poolIdInput.value = '';
       poolNameInput.value = '';
       this.showToast(`Joined pool "${poolName}"`, 'success');
@@ -895,7 +899,7 @@ class FirebasePromiseApp {
     try {
       this.db.collection('pools').doc(poolId).collection('activity').add({
         type: 'left', by: this.currentUser.email, timestamp: new Date().toISOString()
-      }).catch(() => {});
+      }).catch(e => console.warn('pool activity write failed:', e));
       await this.db.collection('users')
         .doc(this.currentUser.uid)
         .collection('pools')
@@ -931,6 +935,10 @@ class FirebasePromiseApp {
         invitedByEmail: this.currentUser.email,
         createdAt: new Date().toISOString(),
       });
+      this.db.collection('pools').doc(poolId).collection('activity').add({
+        type: 'invited', by: this.currentUser.email, invitee: email,
+        timestamp: new Date().toISOString()
+      }).catch(e => console.warn('activity write failed:', e));
       this.showToast(`Invited ${email} to "${poolName}"`, 'success');
     } catch (error) {
       console.error('Failed to send pool invite:', error);
@@ -958,6 +966,10 @@ class FirebasePromiseApp {
             .collection('pools')
             .doc(poolId)
             .set({ poolId, name: poolName, joinedAt: new Date().toISOString(), invitedBy: invitedByEmail });
+          this.db.collection('pools').doc(poolId).collection('activity').add({
+            type: 'joined', by: this.currentUser.email, via: 'invite', invitedBy: invitedByEmail,
+            timestamp: new Date().toISOString()
+          }).catch(e => console.warn('activity write failed:', e));
           this.showToast(`Joined pool "${poolName}" (invited by ${invitedByEmail})`, 'success');
         }
         batch.delete(doc.ref);
@@ -1021,7 +1033,7 @@ class FirebasePromiseApp {
           this.db.collection('pools').doc(poolId).collection('activity').add({
             type: 'posted', by: this.currentUser.email, content: content,
             quantity: quantity, timestamp: new Date().toISOString()
-          }).catch(() => {});
+          }).catch(e => console.warn('pool activity write failed:', e));
           this.showToast(`Posted to pool "${poolTemplate.poolName}"`, 'success');
           this.addActivity(`Posted ${quantity} promise(s) to pool "${poolTemplate.poolName}"`);
           document.getElementById('createPromiseForm').reset();
@@ -2560,6 +2572,7 @@ class FirebasePromiseApp {
         const qty = entry.quantity > 1 ? ` (×${entry.quantity})` : '';
         return `${ico('📝')}<strong>${who}</strong> posted${snippet}${qty} · <em>${when}</em>`;
       }
+      case 'invited':  return `${ico('📨')}<strong>${who}</strong> invited ${this.displayName(entry.invitee || '')} · <em>${when}</em>`;
       case 'redeemed': return `${ico('✅')}<strong>${who}</strong> redeemed${snippet} · <em>${when}</em>`;
       case 'transferred': {
         const to = entry.to ? ` → ${this.displayName(entry.to)}` : '';
