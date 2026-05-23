@@ -76,6 +76,10 @@ class FirebasePromiseApp {
     this.selectedPoolId = null;
     this.activities = [];
 
+    // Usernames
+    this.currentUsername = null;
+    this.usernames = new Map(); // email → username
+
     // Encryption
     this.myKeyPair = null;
     this.contactPublicKeys = new Map();
@@ -690,12 +694,24 @@ class FirebasePromiseApp {
     const contactsUnsub = this.db.collection('users')
       .doc(this.currentUser.uid)
       .collection('contacts')
-      .onSnapshot((snapshot) => {
+      .onSnapshot(async (snapshot) => {
         console.log('Contacts snapshot received:', snapshot.size);
         this.contacts.clear();
         snapshot.forEach((doc) => {
           this.contacts.set(doc.data().email, doc.data());
         });
+        // Fetch usernames for all contacts
+        const uids = snapshot.docs.map(d => d.id);
+        if (uids.length > 0) {
+          const chunks = [];
+          for (let i = 0; i < uids.length; i += 10) chunks.push(uids.slice(i, i + 10));
+          for (const chunk of chunks) {
+            const res = await this.db.collection('users').where(firebase.firestore.FieldPath.documentId(), 'in', chunk).get();
+            res.forEach(d => {
+              if (d.data().username) this.usernames.set(d.data().email, d.data().username);
+            });
+          }
+        }
         this.updateUI();
       });
     this.unsubscribers.push(contactsUnsub);
@@ -1093,6 +1109,14 @@ class FirebasePromiseApp {
             return;
         }
 
+        // Route to pool transfer if a pool was selected
+        if (newReceiverEmail.startsWith('pool:')) {
+            const poolId = newReceiverEmail.slice(5);
+            document.getElementById('transferPromiseForm').reset();
+            await this.transferToPool(promiseId, poolId);
+            return;
+        }
+
         const promise = this.promises.get(promiseId);
 
         if (!promise) {
@@ -1203,12 +1227,241 @@ class FirebasePromiseApp {
 
 
 
+  displayName(email) {
+    if (!email) return '';
+    const username = this.usernames.get(email);
+    return username ? `@${username}` : email;
+  }
+
+  toggleSettings() {
+    const panel = document.getElementById('settingsPanel');
+    if (!panel) return;
+    const isHidden = panel.style.display === 'none' || panel.style.display === '';
+    panel.style.display = isHidden ? 'block' : 'none';
+    if (isHidden) {
+      const input = document.getElementById('usernameInput');
+      if (input && this.currentUsername) input.value = this.currentUsername;
+    }
+  }
+
+  async saveUsername(username) {
+    username = username.trim().toLowerCase();
+    if (!username) { this.showToast('Please enter a username', 'error'); return; }
+    if (!/^[a-z0-9_]{3,20}$/.test(username)) {
+      this.showToast('Username must be 3–20 chars: letters, numbers, underscores only', 'error');
+      return;
+    }
+    if (username === this.currentUsername) {
+      this.showToast('That is already your username', 'error');
+      return;
+    }
+    this.showLoading();
+    try {
+      const taken = await this.db.collection('users').where('username', '==', username).get();
+      if (!taken.empty) {
+        this.showToast('Username already taken', 'error');
+        this.hideLoading();
+        return;
+      }
+      await this.db.collection('users').doc(this.currentUser.uid).update({ username });
+      this.currentUsername = username;
+      this.usernames.set(this.currentUser.email, username);
+      document.getElementById('currentAgentKey').textContent = `@${username}`;
+      this.showToast(`Username set to @${username}`, 'success');
+      document.getElementById('settingsPanel').style.display = 'none';
+    } catch (e) {
+      this.showToast('Failed to save username: ' + e.message, 'error');
+    } finally {
+      this.hideLoading();
+    }
+  }
+
   showTransferUI(promiseId) {
     console.log('Showing transfer UI for promise:', promiseId);
     // Set the promise select to this promise
     document.getElementById('transferPromiseSelect').value = promiseId;
     // Switch to transfer tab
     this.switchTab('transfer');
+  }
+
+  async transferToPool(promiseId, poolId) {
+    const promise = this.promises.get(promiseId);
+    if (!promise) { this.showToast('Promise not found', 'error'); return; }
+    if (promise.locked) { this.showToast('Cannot transfer locked promise', 'error'); return; }
+    if (promise.receiverEmail !== this.currentUser.email) {
+      this.showToast('Only the current receiver can transfer this promise', 'error');
+      return;
+    }
+    if (!this.myKeyPair || !this.myKeyPair.secretKey) {
+      this.showToast('Cannot transfer: encryption keys not loaded', 'error');
+      return;
+    }
+
+    this.showLoading();
+    try {
+      const encryptedData = promise.contentEncryptedForReceiver || promise.contentEncrypted;
+      let plainContent;
+      try {
+        plainContent = PromiseEncryption.decrypt(encryptedData, this.myKeyPair.secretKey);
+      } catch (e) {
+        this.showToast('Cannot transfer: unable to decrypt promise content', 'error');
+        this.hideLoading();
+        return;
+      }
+
+      const pool = this.myPools.get(poolId);
+      const poolName = pool ? (pool.name || poolId) : poolId;
+      const now = new Date().toISOString();
+
+      const batch = this.db.batch();
+
+      batch.set(this.db.collection('promises').doc(), {
+        isPoolPromise: true,
+        poolId,
+        content: plainContent,
+        senderEmail: this.currentUser.email,
+        senderId: this.currentUser.uid,
+        status: 'active',
+        createdAt: now,
+        transferredFrom: promiseId,
+        transferredFromEmail: promise.senderEmail,
+      });
+
+      batch.update(this.db.collection('promises').doc(promiseId), {
+        status: 'transferred',
+        transferredToPool: poolId,
+        updatedAt: now,
+      });
+
+      await batch.commit();
+
+      this.showToast(`Promise transferred to pool "${poolName}"`, 'success');
+      this.addActivity(`Promise transferred to pool "${poolName}"`);
+    } catch (error) {
+      console.error('Transfer to pool error:', error);
+      this.showToast('Failed to transfer to pool: ' + error.message, 'error');
+    } finally {
+      this.hideLoading();
+    }
+  }
+
+  async redeemPoolPromise(promiseId) {
+    const promise = this.promises.get(promiseId);
+    if (!promise || !promise.isPoolPromise) { this.showToast('Promise not found', 'error'); return; }
+    this.showLoading();
+    try {
+      const now = new Date().toISOString();
+      const batch = this.db.batch();
+      batch.update(this.db.collection('promises').doc(promiseId), {
+        status: 'redeemed',
+        redeemedBy: this.currentUser.email,
+        redeemedAt: now,
+      });
+      batch.set(this.db.collection('pools').doc(promise.poolId).collection('activity').doc(), {
+        type: 'redeemed',
+        promiseId,
+        content: promise.content,
+        by: this.currentUser.email,
+        timestamp: now,
+      });
+      await batch.commit();
+      this.showToast('Pool promise redeemed', 'success');
+    } catch (e) {
+      this.showToast('Failed to redeem: ' + e.message, 'error');
+    } finally {
+      this.hideLoading();
+    }
+  }
+
+  showPoolTransferUI(promiseId) {
+    const promise = this.promises.get(promiseId);
+    if (!promise) return;
+    const contacts = Array.from(this.contacts.values());
+    if (contacts.length === 0) {
+      this.showToast('Add contacts first to transfer a promise', 'error');
+      return;
+    }
+    const contactOptions = contacts.map(c => {
+      const name = this.usernames.get(c.email) ? `@${this.usernames.get(c.email)} (${c.email})` : c.email;
+      return `<option value="${c.email}">${name}</option>`;
+    }).join('');
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000';
+    modal.innerHTML = `
+      <div style="background:var(--bg-card,#1e2a3a);border-radius:12px;padding:24px;max-width:400px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.4)">
+        <h3 style="margin:0 0 12px;color:var(--text-primary,#e2e8f0)">Transfer as Payment</h3>
+        <p style="margin:0 0 16px;font-size:0.9em;color:var(--text-secondary,#94a3b8)">"${promise.content}"</p>
+        <select id="poolTransferRecipient" style="width:100%;margin-bottom:16px;padding:8px;border-radius:6px;border:1px solid var(--border,#334155);background:var(--bg-input,#0f172a);color:var(--text-primary,#e2e8f0)">
+          <option value="">-- Select recipient --</option>
+          ${contactOptions}
+        </select>
+        <div style="display:flex;gap:8px">
+          <button id="confirmPoolTransfer" class="btn btn--primary" style="flex:1">Transfer</button>
+          <button id="cancelPoolTransfer" class="btn btn--secondary" style="flex:1">Cancel</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    document.getElementById('confirmPoolTransfer').onclick = async () => {
+      const recipientEmail = document.getElementById('poolTransferRecipient').value;
+      if (!recipientEmail) { this.showToast('Select a recipient', 'error'); return; }
+      document.body.removeChild(modal);
+      await this.transferPoolPromise(promiseId, recipientEmail);
+    };
+    document.getElementById('cancelPoolTransfer').onclick = () => document.body.removeChild(modal);
+  }
+
+  async transferPoolPromise(promiseId, recipientEmail) {
+    const promise = this.promises.get(promiseId);
+    if (!promise || !promise.isPoolPromise) { this.showToast('Promise not found', 'error'); return; }
+    if (!this.myKeyPair) { this.showToast('Encryption keys not loaded', 'error'); return; }
+    this.showLoading();
+    try {
+      const userQuery = await this.db.collection('users').where('email', '==', recipientEmail).get();
+      if (userQuery.empty) { this.showToast('Recipient not found', 'error'); this.hideLoading(); return; }
+      const recipientDoc = userQuery.docs[0];
+      const recipientPublicKey = recipientDoc.data().publicKey;
+      const now = new Date().toISOString();
+
+      const encryptedForRecipient = PromiseEncryption.encrypt(promise.content, recipientPublicKey);
+      const encryptedForSender = PromiseEncryption.encrypt(promise.content, this.currentUserDoc.publicKey);
+
+      const batch = this.db.batch();
+      batch.set(this.db.collection('promises').doc(), {
+        senderId: this.currentUser.uid,
+        senderEmail: this.currentUser.email,
+        receiverId: recipientDoc.id,
+        receiverEmail: recipientEmail,
+        contentEncryptedForReceiver: encryptedForRecipient,
+        contentEncryptedForSender: encryptedForSender,
+        status: 'active',
+        locked: false,
+        createdAt: now,
+        transferHistory: [{ from: `pool:${promise.poolId}`, to: recipientEmail, timestamp: now }],
+      });
+      batch.update(this.db.collection('promises').doc(promiseId), {
+        status: 'transferred',
+        transferredBy: this.currentUser.email,
+        transferredTo: recipientEmail,
+        updatedAt: now,
+      });
+      batch.set(this.db.collection('pools').doc(promise.poolId).collection('activity').doc(), {
+        type: 'transferred',
+        promiseId,
+        content: promise.content,
+        by: this.currentUser.email,
+        to: recipientEmail,
+        timestamp: now,
+      });
+      await batch.commit();
+      this.showToast(`Promise transferred to ${this.displayName(recipientEmail)}`, 'success');
+    } catch (e) {
+      console.error('Pool transfer error:', e);
+      this.showToast('Failed to transfer: ' + e.message, 'error');
+    } finally {
+      this.hideLoading();
+    }
   }
 
   async redeemPromise(promiseId) {
@@ -1330,7 +1583,15 @@ class FirebasePromiseApp {
     console.log('Showing app container');
     document.getElementById('authScreen').classList.add('hidden');
     document.getElementById('appContainer').classList.remove('hidden');
-    document.getElementById('currentAgentKey').textContent = this.currentUser.email;
+    // Load own username if set
+    const userDoc = await this.db.collection('users').doc(this.currentUser.uid).get();
+    if (userDoc.exists && userDoc.data().username) {
+      this.currentUsername = userDoc.data().username;
+      this.usernames.set(this.currentUser.email, this.currentUsername);
+      document.getElementById('currentAgentKey').textContent = `@${this.currentUsername}`;
+    } else {
+      document.getElementById('currentAgentKey').textContent = this.currentUser.email;
+    }
 
     // Setup app listeners ONCE
     if (!this.eventListenersInitialized) {
@@ -1469,6 +1730,13 @@ class FirebasePromiseApp {
                 });
             }
 
+            const usernameInput = document.getElementById('usernameInput');
+            if (usernameInput) {
+                usernameInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); this.saveUsername(usernameInput.value); }
+                });
+            }
+
             const transferForm = document.getElementById('transferPromiseForm');
             if (transferForm) {
                 transferForm.addEventListener('submit', (e) => {
@@ -1509,6 +1777,10 @@ class FirebasePromiseApp {
                 } else if (e.target.matches('[data-action="transfer"]')) {
                     const promiseId = e.target.dataset.id;
                     this.showTransferUI(promiseId);
+                } else if (e.target.matches('[data-action="pool-redeem"]')) {
+                    this.redeemPoolPromise(e.target.dataset.id);
+                } else if (e.target.matches('[data-action="pool-transfer"]')) {
+                    this.showPoolTransferUI(e.target.dataset.id);
                 }
             });
 
@@ -1589,9 +1861,9 @@ class FirebasePromiseApp {
       if (transferSelect) {
         transferSelect.innerHTML = '<option value="">-- Select a promise to transfer --</option>';
 
-        // Only show promises YOU received (not locked, not redeemed)
+        // Only show promises YOU received (not locked, not redeemed, not transferred)
         Array.from(this.promises.values())
-          .filter(p => p.receiverEmail === this.currentUser.email && p.status !== 'redeemed' && !p.locked)
+          .filter(p => p.receiverEmail === this.currentUser.email && p.status !== 'redeemed' && p.status !== 'transferred' && !p.locked)
           .forEach(promise => {
             const label = this.decryptPromiseContent(promise).substring(0, 50);
             const option = document.createElement('option');
@@ -1601,7 +1873,7 @@ class FirebasePromiseApp {
           });
       }
 
-      // ✅ POPULATE TRANSFER RECEIVER CONTACTS DROPDOWN
+      // ✅ POPULATE TRANSFER RECEIVER CONTACTS + POOLS DROPDOWN
         const transferReceiver = document.getElementById('transferReceiver');
         if (transferReceiver) {
           transferReceiver.innerHTML = '<option value="">-- Select a contact --</option>';
@@ -1613,6 +1885,18 @@ class FirebasePromiseApp {
               option.textContent = contact.email;
               transferReceiver.appendChild(option);
             });
+
+          if (this.myPools.size > 0) {
+            const group = document.createElement('optgroup');
+            group.label = 'My Pools';
+            Array.from(this.myPools.values()).forEach(pool => {
+              const option = document.createElement('option');
+              option.value = `pool:${pool.poolId}`;
+              option.textContent = `📢 ${pool.name || pool.poolId}`;
+              group.appendChild(option);
+            });
+            transferReceiver.appendChild(group);
+          }
         }
 
       const currentPane = document.querySelector('.tab-pane.active');
@@ -1812,7 +2096,7 @@ class FirebasePromiseApp {
           <div class="promise-content">${content}</div>
 
           <div class="promise-meta">
-            <div><strong>${isInbox ? 'From' : 'To'}:</strong> ${isInbox ? promise.senderEmail : promise.receiverEmail}</div>
+            <div><strong>${isInbox ? 'From' : 'To'}:</strong> ${this.displayName(isInbox ? promise.senderEmail : promise.receiverEmail)}</div>
             <div><strong>Created:</strong> ${createdDate}</div>
             ${promise.expiresAt ? `<div><strong>Expires:</strong> ${new Date(promise.expiresAt).toLocaleDateString()}</div>` : ''}
           </div>
@@ -1869,8 +2153,9 @@ class FirebasePromiseApp {
     renderPoolPromiseCard(promise) {
       const content = promise.content || '[No content]';
       const expired = this.isExpired(promise);
-      const statusClass = promise.status === 'redeemed' ? 'redeemed' : (expired ? 'expired' : 'pool');
-      const statusText = promise.status === 'redeemed' ? '✅ Redeemed' : (expired ? '⏰ Expired' : '📢 Pool');
+      const isActive = promise.status === 'active' && !expired;
+      const statusClass = promise.status === 'redeemed' ? 'redeemed' : (promise.status === 'transferred' ? 'redeemed' : (expired ? 'expired' : 'pool'));
+      const statusText = promise.status === 'redeemed' ? `✅ Redeemed by ${this.displayName(promise.redeemedBy || '')}` : (promise.status === 'transferred' ? `↗️ Transferred by ${this.displayName(promise.transferredBy || '')}` : (expired ? '⏰ Expired' : '📢 Pool'));
       const createdDate = new Date(promise.createdAt).toLocaleDateString();
       return `
         <div class="promise-card">
@@ -1879,10 +2164,16 @@ class FirebasePromiseApp {
           </div>
           <div class="promise-content">${content}</div>
           <div class="promise-meta">
-            <div><strong>From:</strong> ${promise.senderEmail}</div>
+            <div><strong>From:</strong> ${this.displayName(promise.senderEmail)}</div>
             <div><strong>Created:</strong> ${createdDate}</div>
             ${promise.expiresAt ? `<div><strong>Expires:</strong> ${new Date(promise.expiresAt).toLocaleDateString()}</div>` : ''}
           </div>
+          ${isActive ? `
+            <div class="promise-actions">
+              <button class="btn btn--primary btn--sm" data-action="pool-redeem" data-id="${promise.id}">Redeem</button>
+              <button class="btn btn--secondary btn--sm" data-action="pool-transfer" data-id="${promise.id}">Transfer</button>
+            </div>
+          ` : ''}
         </div>
       `;
     }
@@ -1897,15 +2188,21 @@ class FirebasePromiseApp {
       }
 
       container.innerHTML = Array.from(this.contacts.values())
-        .map(contact => `
-          <div class="contact-card">
-            <div class="contact-email">${contact.email}</div>
-            <div style="font-size: 12px; color: var(--color-text-secondary);">Added ${new Date(contact.addedAt).toLocaleDateString()}</div>
-            <div class="contact-actions">
-              <button onclick="app.removeContact('${contact.email}')" class="btn btn--sm btn--secondary">Remove</button>
+        .map(contact => {
+          const username = this.usernames.get(contact.email);
+          return `
+            <div class="contact-card">
+              <div class="contact-info">
+                ${username ? `<div style="font-weight:600;margin-bottom:2px;">@${username}</div>` : ''}
+                <div class="contact-email">${contact.email}</div>
+                <div style="font-size: 12px; color: var(--color-text-secondary);">Added ${new Date(contact.addedAt).toLocaleDateString()}</div>
+              </div>
+              <div class="contact-actions">
+                <button onclick="app.removeContact('${contact.email}')" class="btn btn--sm btn--secondary">Remove</button>
+              </div>
             </div>
-          </div>
-        `).join('');
+          `;
+        }).join('');
     }
 
     filterPromises(tabId, filterValue) {
@@ -2019,9 +2316,9 @@ class FirebasePromiseApp {
       && new Date(promise.expiresAt) < new Date();
   }
 
-  // Live promise: neither redeemed nor expired (this is what Inbox/Outbox show)
+  // Live promise: neither redeemed, transferred, nor expired (this is what Inbox/Outbox show)
   isActive(promise) {
-    return promise.status !== 'redeemed' && !this.isExpired(promise);
+    return promise.status !== 'redeemed' && promise.status !== 'transferred' && !this.isExpired(promise);
   }
 
   addActivity(message) {
