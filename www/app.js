@@ -2563,7 +2563,7 @@ class FirebasePromiseApp {
       case 'redeemed': return `${ico('✅')}<strong>${who}</strong> redeemed${snippet} · <em>${when}</em>`;
       case 'transferred': {
         const to = entry.to ? ` → ${this.displayName(entry.to)}` : '';
-        return `${ico('🤝')}<strong>${who}</strong> transferred${snippet}${to} · <em>${when}</em>`;
+        return `${ico('✈️')}<strong>${who}</strong> transferred${snippet}${to} · <em>${when}</em>`;
       }
       default: return `${ico('📋')}<strong>${who}</strong> ${entry.type}${snippet} · <em>${when}</em>`;
     }
