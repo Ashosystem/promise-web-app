@@ -1282,6 +1282,11 @@ class FirebasePromiseApp {
       || '';
   }
 
+  poolIcon(size) {
+    const s = size || '1em';
+    return `<img src="swimming-pool.png" alt="" style="width:${s};height:${s};vertical-align:-3px;">`;
+  }
+
   toggleSettings() {
     const panel = document.getElementById('settingsPanel');
     if (!panel) return;
@@ -2176,7 +2181,7 @@ class FirebasePromiseApp {
       if (pools.length === 0) {
         container.innerHTML = `
           <div class="empty-state">
-            <p>🏊 You haven't joined any pools yet</p>
+            <p>${this.poolIcon('1.2em')} You haven't joined any pools yet</p>
             <small>Join a pool above to see public promises from its members</small>
           </div>
         `;
@@ -2191,7 +2196,7 @@ class FirebasePromiseApp {
           <div class="pool-section" style="margin-bottom: var(--space-16);cursor:pointer;" onclick="app.openPoolDetail('${pid}')">
             <div class="pool-header" style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-16);background:var(--color-surface);border-radius:8px;border:1px solid var(--color-border);transition:border-color 0.15s;" onmouseover="this.style.borderColor='var(--color-primary,#6366f1)'" onmouseout="this.style.borderColor='var(--color-border)'">
               <div>
-                <strong style="font-size:16px;">🏊 ${pool.name}</strong>
+                <strong style="font-size:16px;">${this.poolIcon('1.1em')} ${pool.name}</strong>
                 <div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px;">id: ${pid} · ${poolPromises.length} active promise${poolPromises.length === 1 ? '' : 's'}</div>
               </div>
               <div style="display:flex;align-items:center;gap:8px;">
@@ -2234,7 +2239,7 @@ class FirebasePromiseApp {
           <div style="display:flex;align-items:center;gap:12px;padding:var(--space-12);background:var(--color-surface);border:1px solid var(--color-border);border-radius:8px 8px 0 0;border-bottom:none;">
             <button onclick="app.closePoolDetail()" class="btn btn--sm btn--secondary" style="flex-shrink:0;">← Back</button>
             <div style="flex:1;min-width:0;">
-              <div style="font-size:18px;font-weight:600;">🏊 ${pool.name}</div>
+              <div style="font-size:18px;font-weight:600;">${this.poolIcon('1.2em')} ${pool.name}</div>
               <div style="font-size:12px;color:var(--color-text-secondary);">id: ${poolId} · ${poolPromises.length} active</div>
             </div>
             <button onclick="app.leavePool('${poolId}'); app.closePoolDetail();" class="btn btn--sm btn--secondary">Leave</button>
@@ -2344,7 +2349,7 @@ class FirebasePromiseApp {
       const expired = this.isExpired(promise);
       const isActive = promise.status === 'active' && !expired;
       const statusClass = promise.status === 'redeemed' ? 'redeemed' : (promise.status === 'transferred' ? 'redeemed' : (expired ? 'expired' : 'pool'));
-      const statusText = promise.status === 'redeemed' ? `✅ Redeemed by ${this.displayName(promise.redeemedBy || '')}` : (promise.status === 'transferred' ? `↗️ Transferred by ${this.displayName(promise.transferredBy || '')}` : (expired ? '⏰ Expired' : '🏊 Pool'));
+      const statusText = promise.status === 'redeemed' ? `✅ Redeemed by ${this.displayName(promise.redeemedBy || '')}` : (promise.status === 'transferred' ? `↗️ Transferred by ${this.displayName(promise.transferredBy || '')}` : (expired ? '⏰ Expired' : `${this.poolIcon('1em')} Pool`));
       const createdDate = new Date(promise.createdAt).toLocaleDateString();
       return `
         <div class="promise-card">
