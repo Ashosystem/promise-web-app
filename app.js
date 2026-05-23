@@ -74,6 +74,8 @@ class FirebasePromiseApp {
     this.myPools = new Map();
     this.poolUnsubscribers = new Map();
     this.selectedPoolId = null;
+    this.selectedPoolDetailId = null;
+    this.poolDetailTab = 'promises';
     this.activities = [];
 
     // Usernames
@@ -2166,6 +2168,10 @@ class FirebasePromiseApp {
     updatePoolsView() {
       const container = document.getElementById('poolsList');
       if (!container) return;
+      if (this.selectedPoolDetailId) {
+        this.renderPoolDetail(container, this.selectedPoolDetailId);
+        return;
+      }
       const pools = Array.from(this.myPools.values());
       if (pools.length === 0) {
         container.innerHTML = `
@@ -2178,35 +2184,159 @@ class FirebasePromiseApp {
       }
       container.innerHTML = pools.map(pool => {
         const poolPromises = Array.from(this.promises.values())
-          .filter(p => p.poolId === pool.id && this.isActive(p))
-          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-        const cards = poolPromises.length === 0
-          ? `<div class="empty-state"><p>No active promises in this pool yet</p></div>`
-          : poolPromises.map(p => this.renderPoolPromiseCard(p)).join('');
-        const tabBtnBase = 'background:none;border:none;cursor:pointer;padding:8px 16px;font-size:14px;transition:color 0.15s;';
+          .filter(p => p.poolId === pool.id && this.isActive(p));
         const pid = pool.id;
+        const safeName = pool.name.replace(/'/g, "\\'");
         return `
-          <div class="pool-section" style="margin-bottom: var(--space-24);">
-            <div class="pool-header" style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-12);background:var(--color-surface);border-radius:8px 8px 0 0;border:1px solid var(--color-border);border-bottom:none;">
+          <div class="pool-section" style="margin-bottom: var(--space-16);cursor:pointer;" onclick="app.openPoolDetail('${pid}')">
+            <div class="pool-header" style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-16);background:var(--color-surface);border-radius:8px;border:1px solid var(--color-border);transition:border-color 0.15s;" onmouseover="this.style.borderColor='var(--color-primary,#6366f1)'" onmouseout="this.style.borderColor='var(--color-border)'">
               <div>
-                <strong>📢 ${pool.name}</strong>
-                <div style="font-size:12px;color:var(--color-text-secondary);">id: ${pid} · ${poolPromises.length} active</div>
+                <strong style="font-size:16px;">📢 ${pool.name}</strong>
+                <div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px;">id: ${pid} · ${poolPromises.length} active promise${poolPromises.length === 1 ? '' : 's'}</div>
               </div>
-              <button onclick="app.leavePool('${pid}')" class="btn btn--sm btn--secondary">Leave</button>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="color:var(--color-text-secondary);font-size:13px;">Open →</span>
+              </div>
             </div>
-            <div style="display:flex;gap:8px;padding:8px var(--space-12);background:var(--color-surface);border:1px solid var(--color-border);border-top:none;border-bottom:none;">
-              <input type="email" id="inviteInput-${pid}" placeholder="Invite by email" class="form-control" style="flex:1;font-size:13px;">
-              <button onclick="app.inviteToPool('${pid}', '${pool.name.replace(/'/g, "\\'")}', document.getElementById('inviteInput-${pid}').value.trim()); document.getElementById('inviteInput-${pid}').value='';" class="btn btn--sm btn--primary">Invite</button>
-            </div>
-            <div style="display:flex;background:var(--color-surface);border:1px solid var(--color-border);border-top:none;border-bottom:none;">
-              <button id="pool-tabbtn-promises-${pid}" onclick="app.switchPoolTab('${pid}','promises')" style="${tabBtnBase}border-bottom:2px solid var(--color-primary,#6366f1);color:var(--color-primary,#6366f1);font-weight:600;">Promises</button>
-              <button id="pool-tabbtn-activity-${pid}" onclick="app.switchPoolTab('${pid}','activity')" style="${tabBtnBase}border-bottom:2px solid transparent;color:var(--color-text-secondary);">Activity</button>
-            </div>
-            <div id="pool-tab-promises-${pid}" style="border:1px solid var(--color-border);border-top:none;border-radius:0 0 8px 8px;padding:var(--space-12);">${cards}</div>
-            <div id="pool-tab-activity-${pid}" style="display:none;border:1px solid var(--color-border);border-top:none;border-radius:0 0 8px 8px;padding:var(--space-12);"></div>
           </div>
         `;
       }).join('');
+    }
+
+    openPoolDetail(poolId) {
+      this.selectedPoolDetailId = poolId;
+      this.poolDetailTab = 'promises';
+      this.updatePoolsView();
+    }
+
+    closePoolDetail() {
+      this.selectedPoolDetailId = null;
+      this.updatePoolsView();
+    }
+
+    renderPoolDetail(container, poolId) {
+      const pool = this.myPools.get(poolId);
+      if (!pool) { this.closePoolDetail(); return; }
+      const poolPromises = Array.from(this.promises.values())
+        .filter(p => p.poolId === poolId && this.isActive(p))
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      const promisesHTML = poolPromises.length === 0
+        ? `<div class="empty-state" style="padding:var(--space-24);"><p>No active promises in this pool yet</p></div>`
+        : poolPromises.map(p => this.renderPoolPromiseCard(p)).join('');
+      const safeName = pool.name.replace(/'/g, "\\'");
+      const tab = this.poolDetailTab;
+      const tabBtn = (key, label) => {
+        const active = tab === key;
+        return `<button onclick="app.switchPoolDetailTab('${key}')" style="background:none;border:none;cursor:pointer;padding:12px 20px;font-size:14px;border-bottom:2px solid ${active ? 'var(--color-primary,#6366f1)' : 'transparent'};color:${active ? 'var(--color-primary,#6366f1)' : 'var(--color-text-secondary)'};font-weight:${active ? '600' : '400'};">${label}</button>`;
+      };
+      container.innerHTML = `
+        <div class="pool-detail" style="display:flex;flex-direction:column;min-height:70vh;">
+          <div style="display:flex;align-items:center;gap:12px;padding:var(--space-12);background:var(--color-surface);border:1px solid var(--color-border);border-radius:8px 8px 0 0;border-bottom:none;">
+            <button onclick="app.closePoolDetail()" class="btn btn--sm btn--secondary" style="flex-shrink:0;">← Back</button>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:18px;font-weight:600;">📢 ${pool.name}</div>
+              <div style="font-size:12px;color:var(--color-text-secondary);">id: ${poolId} · ${poolPromises.length} active</div>
+            </div>
+            <button onclick="app.leavePool('${poolId}'); app.closePoolDetail();" class="btn btn--sm btn--secondary">Leave</button>
+          </div>
+          <div style="display:flex;gap:8px;padding:8px var(--space-12);background:var(--color-surface);border:1px solid var(--color-border);border-top:none;border-bottom:none;">
+            <input type="email" id="inviteInput-${poolId}" placeholder="Invite by email" class="form-control" style="flex:1;font-size:13px;">
+            <button onclick="app.inviteToPool('${poolId}', '${safeName}', document.getElementById('inviteInput-${poolId}').value.trim()); document.getElementById('inviteInput-${poolId}').value='';" class="btn btn--sm btn--primary">Invite</button>
+          </div>
+          <div style="display:flex;background:var(--color-surface);border:1px solid var(--color-border);border-top:none;border-bottom:none;">
+            ${tabBtn('promises', 'Promises')}
+            ${tabBtn('activity', 'Activity')}
+            ${tabBtn('members', 'Members')}
+          </div>
+          <div style="flex:1;border:1px solid var(--color-border);border-top:none;border-radius:0 0 8px 8px;padding:var(--space-16);background:var(--color-background);min-height:400px;">
+            ${tab === 'promises' ? promisesHTML : ''}
+            ${tab === 'activity' ? `<div id="pool-detail-activity"><p style="color:var(--color-text-secondary)">Loading activity…</p></div>` : ''}
+            ${tab === 'members' ? `<div id="pool-detail-members"><p style="color:var(--color-text-secondary)">Loading members…</p></div>` : ''}
+          </div>
+        </div>
+      `;
+      if (tab === 'activity') this.loadPoolDetailActivity(poolId);
+      if (tab === 'members') this.loadPoolDetailMembers(poolId);
+    }
+
+    switchPoolDetailTab(tab) {
+      this.poolDetailTab = tab;
+      this.updatePoolsView();
+    }
+
+    async loadPoolDetailActivity(poolId) {
+      const panel = document.getElementById('pool-detail-activity');
+      if (!panel) return;
+      try {
+        const snap = await this.db.collection('pools').doc(poolId).collection('activity')
+          .orderBy('timestamp', 'desc').limit(100).get();
+        if (snap.empty) {
+          panel.innerHTML = '<p style="color:var(--color-text-secondary)">No activity yet.</p>';
+          return;
+        }
+        panel.innerHTML = snap.docs.map(doc => {
+          const entry = doc.data();
+          return `<div style="padding:10px 0;border-bottom:1px solid var(--color-border);font-size:14px;line-height:1.5">${this.formatActivityEntry(entry)}</div>`;
+        }).join('');
+      } catch (e) {
+        panel.innerHTML = '<p style="color:var(--color-text-secondary)">Could not load activity.</p>';
+      }
+    }
+
+    async loadPoolDetailMembers(poolId) {
+      const panel = document.getElementById('pool-detail-members');
+      if (!panel) return;
+      try {
+        const snap = await this.db.collection('pools').doc(poolId).collection('activity')
+          .orderBy('timestamp', 'asc').get();
+        const memberState = new Map();
+        let creator = null;
+        let creatorAt = null;
+        snap.docs.forEach(doc => {
+          const e = doc.data();
+          if (!e.by) return;
+          if (e.type === 'created') { creator = e.by; creatorAt = e.timestamp; }
+          const prev = memberState.get(e.by);
+          const wasMember = prev ? prev.member : false;
+          if (e.type === 'left') {
+            memberState.set(e.by, { member: false, firstSeen: prev ? prev.firstSeen : e.timestamp, lastSeen: e.timestamp });
+          } else {
+            memberState.set(e.by, { member: true, firstSeen: prev ? prev.firstSeen : e.timestamp, lastSeen: e.timestamp });
+          }
+        });
+        if (creator && !memberState.has(creator)) memberState.set(creator, { member: true, firstSeen: creatorAt, lastSeen: creatorAt });
+        const me = this.currentUser ? this.currentUser.email : null;
+        if (me && !memberState.has(me) && this.myPools.has(poolId)) {
+          memberState.set(me, { member: true, firstSeen: this.myPools.get(poolId).joinedAt || new Date().toISOString(), lastSeen: new Date().toISOString() });
+        }
+        const members = Array.from(memberState.entries())
+          .filter(([_, s]) => s.member)
+          .sort((a, b) => new Date(a[1].firstSeen) - new Date(b[1].firstSeen));
+        if (members.length === 0) {
+          panel.innerHTML = '<p style="color:var(--color-text-secondary)">No members detected yet from activity log.</p>';
+          return;
+        }
+        const rows = members.map(([email, state]) => {
+          const isCreator = email === creator;
+          const isMe = email === me;
+          const joined = this.relativeTime(state.firstSeen);
+          return `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--color-border);">
+              <div>
+                <div style="font-size:14px;">${this.displayName(email)} ${isMe ? '<span style="font-size:11px;color:var(--color-text-secondary);">(you)</span>' : ''}</div>
+                <div style="font-size:12px;color:var(--color-text-secondary);">First seen ${joined}</div>
+              </div>
+              ${isCreator ? '<span style="font-size:11px;padding:3px 8px;background:var(--color-primary,#6366f1);color:white;border-radius:10px;">creator</span>' : ''}
+            </div>
+          `;
+        }).join('');
+        panel.innerHTML = `
+          <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:12px;font-style:italic;">Membership is derived from the pool's activity log — members who never acted may not appear.</div>
+          ${rows}
+        `;
+      } catch (e) {
+        panel.innerHTML = '<p style="color:var(--color-text-secondary)">Could not load members.</p>';
+      }
     }
 
     renderPoolPromiseCard(promise) {
