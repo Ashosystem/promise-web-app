@@ -2342,16 +2342,19 @@ class FirebasePromiseApp {
             ${tabBtn('promises', 'Promises')}
             ${tabBtn('activity', 'Activity')}
             ${tabBtn('members', 'Members')}
+            ${tabBtn('trusted', 'Trusted Pools')}
           </div>
           <div style="flex:1;border:1px solid var(--color-border);border-top:none;border-radius:0 0 8px 8px;padding:var(--space-16);background:var(--color-background);min-height:400px;">
             ${tab === 'promises' ? promisesHTML : ''}
             ${tab === 'activity' ? `<div id="pool-detail-activity"><p style="color:var(--color-text-secondary)">Loading activity…</p></div>` : ''}
             ${tab === 'members' ? `<div id="pool-detail-members"><p style="color:var(--color-text-secondary)">Loading members…</p></div>` : ''}
+            ${tab === 'trusted' ? `<div id="pool-detail-trusted"><p style="color:var(--color-text-secondary)">Loading trusted pools…</p></div>` : ''}
           </div>
         </div>
       `;
       if (tab === 'activity') this.loadPoolDetailActivity(poolId);
       if (tab === 'members') this.loadPoolDetailMembers(poolId);
+      if (tab === 'trusted') this.loadPoolDetailTrusted(poolId);
     }
 
     switchPoolDetailTab(tab) {
@@ -2375,6 +2378,93 @@ class FirebasePromiseApp {
         }).join('');
       } catch (e) {
         panel.innerHTML = '<p style="color:var(--color-text-secondary)">Could not load activity.</p>';
+      }
+    }
+
+    async addTrustedPool(poolId) {
+      const idInput = document.getElementById(`trustedPoolId-${poolId}`);
+      const nameInput = document.getElementById(`trustedPoolName-${poolId}`);
+      if (!idInput) return;
+      const trustedPoolId = idInput.value.trim();
+      const trustedPoolName = (nameInput && nameInput.value.trim()) || trustedPoolId;
+      if (!trustedPoolId) {
+        this.showToast('Please enter a pool ID to trust', 'error');
+        return;
+      }
+      if (trustedPoolId === poolId) {
+        this.showToast("A pool can't trust itself", 'error');
+        return;
+      }
+      try {
+        await this.db.collection('pools').doc(poolId).collection('trusted-pools').doc(trustedPoolId).set({
+          trustedPoolId,
+          trustedPoolName,
+          addedBy: this.currentUser.email,
+          addedAt: new Date().toISOString()
+        });
+        this.db.collection('pools').doc(poolId).collection('activity').add({
+          type: 'trusted-pool-added', by: this.currentUser.email,
+          trustedPoolId, trustedPoolName, timestamp: new Date().toISOString()
+        }).catch(e => console.warn('pool activity write failed:', e));
+        idInput.value = '';
+        if (nameInput) nameInput.value = '';
+        this.showToast(`Added trusted pool "${trustedPoolName}"`, 'success');
+        this.addActivity(`Added trusted pool "${trustedPoolName}" to "${(this.myPools.get(poolId) || {}).name || poolId}"`);
+        this.loadPoolDetailTrusted(poolId);
+      } catch (error) {
+        console.error('Failed to add trusted pool:', error);
+        this.showToast('Failed to add trusted pool', 'error');
+      }
+    }
+
+    async removeTrustedPool(poolId, trustedPoolId) {
+      try {
+        await this.db.collection('pools').doc(poolId).collection('trusted-pools').doc(trustedPoolId).delete();
+        this.db.collection('pools').doc(poolId).collection('activity').add({
+          type: 'trusted-pool-removed', by: this.currentUser.email,
+          trustedPoolId, timestamp: new Date().toISOString()
+        }).catch(e => console.warn('pool activity write failed:', e));
+        this.showToast('Removed trusted pool', 'success');
+        this.loadPoolDetailTrusted(poolId);
+      } catch (error) {
+        console.error('Failed to remove trusted pool:', error);
+        this.showToast('Failed to remove trusted pool', 'error');
+      }
+    }
+
+    async loadPoolDetailTrusted(poolId) {
+      const panel = document.getElementById('pool-detail-trusted');
+      if (!panel) return;
+      const addBox = `
+        <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+          <input type="text" id="trustedPoolId-${poolId}" placeholder="Trusted pool ID (e.g. bristol-bakers-x1y2)" class="form-control" style="flex:2;min-width:200px;font-size:13px;">
+          <input type="text" id="trustedPoolName-${poolId}" placeholder="Label (optional)" class="form-control" style="flex:1;min-width:120px;font-size:13px;">
+          <button onclick="app.addTrustedPool('${poolId}')" class="btn btn--sm btn--primary">Add</button>
+        </div>
+        <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 var(--space-16);">Any member can add a trusted pool. Every change is recorded in this pool's activity log.</p>`;
+      try {
+        const snap = await this.db.collection('pools').doc(poolId).collection('trusted-pools')
+          .orderBy('addedAt', 'desc').get();
+        if (snap.empty) {
+          panel.innerHTML = addBox + '<p style="color:var(--color-text-secondary)">No trusted pools yet.</p>';
+          return;
+        }
+        const rows = snap.docs.map(doc => {
+          const t = doc.data();
+          const tid = t.trustedPoolId || doc.id;
+          const safeId = tid.replace(/'/g, "\\'");
+          return `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--color-border);">
+              <div style="min-width:0;">
+                <div style="font-size:14px;font-weight:500;">🤝 ${t.trustedPoolName || tid}</div>
+                <div style="font-size:12px;color:var(--color-text-secondary);">id: ${tid} · added by ${this.displayName(t.addedBy)} · ${this.relativeTime(t.addedAt)}</div>
+              </div>
+              <button onclick="app.removeTrustedPool('${poolId}', '${safeId}')" class="btn btn--sm btn--secondary" style="flex-shrink:0;">Remove</button>
+            </div>`;
+        }).join('');
+        panel.innerHTML = addBox + rows;
+      } catch (e) {
+        panel.innerHTML = addBox + '<p style="color:var(--color-text-secondary)">Could not load trusted pools.</p>';
       }
     }
 
@@ -2657,6 +2747,12 @@ class FirebasePromiseApp {
         const plane = `<img src="paper-airplane.png" alt="" style="width:1.2em;height:1.2em;vertical-align:-3px;margin-right:4px;">`;
         return `<span style="display:inline-block;width:1.6em;">${plane}</span><strong>${who}</strong> transferred${snippet}${to} · <em>${when}</em>`;
       }
+      case 'trusted-pool-added': {
+        const tname = entry.trustedPoolName || entry.trustedPoolId || '';
+        return `${ico('🤝')}<strong>${who}</strong> added trusted pool "${tname}" · <em>${when}</em>`;
+      }
+      case 'trusted-pool-removed':
+        return `${ico('✂️')}<strong>${who}</strong> removed trusted pool "${entry.trustedPoolId || ''}" · <em>${when}</em>`;
       default: return `${ico('📋')}<strong>${who}</strong> ${entry.type}${snippet} · <em>${when}</em>`;
     }
   }
