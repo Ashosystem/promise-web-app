@@ -2325,7 +2325,7 @@ class FirebasePromiseApp {
         return `<button onclick="app.switchPoolDetailTab('${key}')" style="background:none;border:none;cursor:pointer;padding:12px 20px;font-size:14px;border-bottom:2px solid ${active ? 'var(--color-primary,#6366f1)' : 'transparent'};color:${active ? 'var(--color-primary,#6366f1)' : 'var(--color-text-secondary)'};font-weight:${active ? '600' : '400'};">${label}</button>`;
       };
       container.innerHTML = `
-        <div class="pool-detail" style="grid-column:1 / -1;width:min(75vw,1100px);margin:0 auto;display:flex;flex-direction:column;min-height:75vh;">
+        <div class="pool-detail" style="grid-column:1 / -1;width:min(96vw,1100px);margin:0 auto;display:flex;flex-direction:column;min-height:75vh;">
           <div style="display:flex;align-items:center;gap:12px;padding:var(--space-12);background:var(--color-surface);border:1px solid var(--color-border);border-radius:8px 8px 0 0;border-bottom:none;">
             <button onclick="app.closePoolDetail()" class="btn btn--sm btn--secondary" style="flex-shrink:0;">← Back</button>
             <div style="flex:1;min-width:0;">
@@ -2396,16 +2396,11 @@ class FirebasePromiseApp {
         return;
       }
       try {
-        await this.db.collection('pools').doc(poolId).collection('trusted-pools').doc(trustedPoolId).set({
-          trustedPoolId,
-          trustedPoolName,
-          addedBy: this.currentUser.email,
-          addedAt: new Date().toISOString()
-        });
-        this.db.collection('pools').doc(poolId).collection('activity').add({
+        // Source of truth is the append-only activity log (same model as Members).
+        await this.db.collection('pools').doc(poolId).collection('activity').add({
           type: 'trusted-pool-added', by: this.currentUser.email,
           trustedPoolId, trustedPoolName, timestamp: new Date().toISOString()
-        }).catch(e => console.warn('pool activity write failed:', e));
+        });
         idInput.value = '';
         if (nameInput) nameInput.value = '';
         this.showToast(`Added trusted pool "${trustedPoolName}"`, 'success');
@@ -2419,11 +2414,11 @@ class FirebasePromiseApp {
 
     async removeTrustedPool(poolId, trustedPoolId) {
       try {
-        await this.db.collection('pools').doc(poolId).collection('trusted-pools').doc(trustedPoolId).delete();
-        this.db.collection('pools').doc(poolId).collection('activity').add({
+        // Removal is an append (never delete) — preserves full traceability.
+        await this.db.collection('pools').doc(poolId).collection('activity').add({
           type: 'trusted-pool-removed', by: this.currentUser.email,
           trustedPoolId, timestamp: new Date().toISOString()
-        }).catch(e => console.warn('pool activity write failed:', e));
+        });
         this.showToast('Removed trusted pool', 'success');
         this.loadPoolDetailTrusted(poolId);
       } catch (error) {
@@ -2443,15 +2438,27 @@ class FirebasePromiseApp {
         </div>
         <p style="font-size:12px;color:var(--color-text-secondary);margin:0 0 var(--space-16);">Any member can add a trusted pool. Every change is recorded in this pool's activity log.</p>`;
       try {
-        const snap = await this.db.collection('pools').doc(poolId).collection('trusted-pools')
-          .orderBy('addedAt', 'desc').get();
-        if (snap.empty) {
+        // Derive the current trusted set by folding add/remove events from the activity log.
+        const snap = await this.db.collection('pools').doc(poolId).collection('activity')
+          .orderBy('timestamp', 'asc').get();
+        const trusted = new Map();
+        snap.docs.forEach(doc => {
+          const e = doc.data();
+          if (e.type === 'trusted-pool-added' && e.trustedPoolId) {
+            trusted.set(e.trustedPoolId, { trustedPoolId: e.trustedPoolId, trustedPoolName: e.trustedPoolName || e.trustedPoolId, addedBy: e.by, addedAt: e.timestamp, active: true });
+          } else if (e.type === 'trusted-pool-removed' && e.trustedPoolId) {
+            const prev = trusted.get(e.trustedPoolId);
+            if (prev) prev.active = false;
+          }
+        });
+        const list = Array.from(trusted.values()).filter(t => t.active)
+          .sort((a, b) => new Date(b.addedAt) - new Date(a.addedAt));
+        if (list.length === 0) {
           panel.innerHTML = addBox + '<p style="color:var(--color-text-secondary)">No trusted pools yet.</p>';
           return;
         }
-        const rows = snap.docs.map(doc => {
-          const t = doc.data();
-          const tid = t.trustedPoolId || doc.id;
+        const rows = list.map(t => {
+          const tid = t.trustedPoolId;
           const safeId = tid.replace(/'/g, "\\'");
           return `
             <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--color-border);">
