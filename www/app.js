@@ -72,7 +72,6 @@ class FirebasePromiseApp {
     this.promises = new Map();
     this.contacts = new Map();
     this.myPools = new Map();
-    this.trustedPools = new Map(); // trustedPoolId → { trustedPoolId, trustedPoolName, sourcePoolIds:Set }
     this.poolUnsubscribers = new Map();
     this.selectedPoolId = null;
     this.selectedPoolDetailId = null;
@@ -844,7 +843,6 @@ class FirebasePromiseApp {
           }
         });
         this.updateUI();
-        this.refreshTrustedPools();
       });
     this.unsubscribers.push(poolsUnsub);
 
@@ -1521,18 +1519,49 @@ class FirebasePromiseApp {
     }
   }
 
-  showPoolTransferUI(promiseId) {
+  // Active trusted pools for a single pool, folded from its activity log.
+  async getTrustedPoolsForPool(poolId) {
+    const snap = await this.db.collection('pools').doc(poolId).collection('activity')
+      .orderBy('timestamp', 'asc').get();
+    const trusted = new Map();
+    snap.docs.forEach(doc => {
+      const e = doc.data();
+      if (e.type === 'trusted-pool-added' && e.trustedPoolId) {
+        trusted.set(e.trustedPoolId, { trustedPoolId: e.trustedPoolId, trustedPoolName: e.trustedPoolName || e.trustedPoolId, active: true });
+      } else if (e.type === 'trusted-pool-removed' && e.trustedPoolId) {
+        const prev = trusted.get(e.trustedPoolId);
+        if (prev) prev.active = false;
+      }
+    });
+    return Array.from(trusted.values()).filter(t => t.active);
+  }
+
+  async showPoolTransferUI(promiseId) {
     const promise = this.promises.get(promiseId);
     if (!promise) return;
     const contacts = Array.from(this.contacts.values());
-    if (contacts.length === 0) {
-      this.showToast('Add contacts first to transfer a promise', 'error');
+
+    // One-hop only: a pool promise may move to the *source* pool's directly-trusted pools.
+    let trustedPools = [];
+    try { trustedPools = await this.getTrustedPoolsForPool(promise.poolId); }
+    catch (e) { console.error('Failed to load trusted pools for transfer:', e); }
+
+    if (contacts.length === 0 && trustedPools.length === 0) {
+      this.showToast('No transfer targets yet — add a contact or a trusted pool first', 'error');
       return;
     }
+
     const contactOptions = contacts.map(c => {
       const name = this.usernames.get(c.email) ? `@${this.usernames.get(c.email)} (${c.email})` : c.email;
       return `<option value="${c.email}">${name}</option>`;
     }).join('');
+    const poolOptions = trustedPools.map(t =>
+      `<option value="pool:${t.trustedPoolId}">🤝 ${t.trustedPoolName || t.trustedPoolId}</option>`
+    ).join('');
+    const groups = [
+      contactOptions ? `<optgroup label="Contacts">${contactOptions}</optgroup>` : '',
+      poolOptions ? `<optgroup label="Trusted Pools">${poolOptions}</optgroup>` : '',
+    ].join('');
 
     const modal = document.createElement('div');
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000';
@@ -1542,7 +1571,7 @@ class FirebasePromiseApp {
         <p style="margin:0 0 16px;font-size:0.9em;color:var(--text-secondary,#94a3b8)">"${promise.content}"</p>
         <select id="poolTransferRecipient" style="width:100%;margin-bottom:16px;padding:8px;border-radius:6px;border:1px solid var(--border,#334155);background:var(--bg-input,#0f172a);color:var(--text-primary,#e2e8f0)">
           <option value="">-- Select recipient --</option>
-          ${contactOptions}
+          ${groups}
         </select>
         <div style="display:flex;gap:8px">
           <button id="confirmPoolTransfer" class="btn btn--primary" style="flex:1">Transfer</button>
@@ -1552,12 +1581,85 @@ class FirebasePromiseApp {
     `;
     document.body.appendChild(modal);
     document.getElementById('confirmPoolTransfer').onclick = async () => {
-      const recipientEmail = document.getElementById('poolTransferRecipient').value;
-      if (!recipientEmail) { this.showToast('Select a recipient', 'error'); return; }
+      const recipient = document.getElementById('poolTransferRecipient').value;
+      if (!recipient) { this.showToast('Select a recipient', 'error'); return; }
       document.body.removeChild(modal);
-      await this.transferPoolPromise(promiseId, recipientEmail);
+      if (recipient.startsWith('pool:')) {
+        await this.transferPoolToPool(promiseId, recipient.slice(5));
+      } else {
+        await this.transferPoolPromise(promiseId, recipient);
+      }
     };
     document.getElementById('cancelPoolTransfer').onclick = () => document.body.removeChild(modal);
+  }
+
+  // Move a pool promise from its current pool to a directly-trusted destination pool.
+  // The promise stays a pool promise (group-as-account); origin lineage is preserved.
+  async transferPoolToPool(promiseId, destPoolId) {
+    const promise = this.promises.get(promiseId);
+    if (!promise || !promise.isPoolPromise) { this.showToast('Promise not found', 'error'); return; }
+    if (promise.status !== 'active') { this.showToast('Only active promises can be transferred', 'error'); return; }
+    const sourcePoolId = promise.poolId;
+    if (destPoolId === sourcePoolId) { this.showToast("Can't transfer a pool to itself", 'error'); return; }
+    this.showLoading();
+    try {
+      const now = new Date().toISOString();
+      const batch = this.db.batch();
+
+      // New pool promise in the destination pool.
+      batch.set(this.db.collection('promises').doc(), {
+        isPoolPromise: true,
+        poolId: destPoolId,
+        content: promise.content,
+        senderEmail: this.currentUser.email,
+        senderId: this.currentUser.uid,
+        originalCreatorEmail: promise.originalCreatorEmail || promise.senderEmail,
+        originalCreatorId: promise.originalCreatorId || promise.senderId,
+        status: 'active',
+        createdAt: now,
+        transferredFrom: promiseId,
+        transferredFromPool: sourcePoolId,
+      });
+
+      // Retire the source-pool promise.
+      batch.update(this.db.collection('promises').doc(promiseId), {
+        status: 'transferred',
+        transferredBy: this.currentUser.email,
+        transferredToPool: destPoolId,
+        updatedAt: now,
+      });
+
+      // Accountability: log the outgoing move in the source pool's activity (we're a member here).
+      batch.set(this.db.collection('pools').doc(sourcePoolId).collection('activity').doc(), {
+        type: 'transferred-to-pool',
+        promiseId,
+        content: promise.content,
+        by: this.currentUser.email,
+        toPoolId: destPoolId,
+        timestamp: now,
+      });
+
+      await batch.commit();
+
+      // Best-effort: log the arrival in the destination pool too. Non-fatal if rules disallow
+      // writing to a pool we're not a member of — the new promise itself is already visible there.
+      this.db.collection('pools').doc(destPoolId).collection('activity').add({
+        type: 'received-from-pool',
+        content: promise.content,
+        by: this.currentUser.email,
+        fromPoolId: sourcePoolId,
+        timestamp: now,
+      }).catch(e => console.warn('Could not log arrival in destination pool:', e.message));
+
+      const destName = (this.myPools.get(destPoolId) || {}).name || destPoolId;
+      this.showToast(`Promise transferred to pool "${destName}"`, 'success');
+      this.addActivity(`Transferred a pool promise to "${destName}"`);
+    } catch (e) {
+      console.error('Pool-to-pool transfer error:', e);
+      this.showToast('Failed to transfer to pool: ' + e.message, 'error');
+    } finally {
+      this.hideLoading();
+    }
   }
 
   async transferPoolPromise(promiseId, recipientEmail) {
@@ -2047,18 +2149,6 @@ class FirebasePromiseApp {
             });
             transferReceiver.appendChild(group);
           }
-
-          if (this.trustedPools.size > 0) {
-            const tgroup = document.createElement('optgroup');
-            tgroup.label = 'Trusted Pools';
-            Array.from(this.trustedPools.values()).forEach(t => {
-              const option = document.createElement('option');
-              option.value = `pool:${t.trustedPoolId}`;
-              option.textContent = `🤝 ${t.trustedPoolName || t.trustedPoolId}`;
-              tgroup.appendChild(option);
-            });
-            transferReceiver.appendChild(tgroup);
-          }
         }
 
       const currentPane = document.querySelector('.tab-pane.active');
@@ -2420,7 +2510,6 @@ class FirebasePromiseApp {
         this.showToast(`Added trusted pool "${trustedPoolName}"`, 'success');
         this.addActivity(`Added trusted pool "${trustedPoolName}" to "${(this.myPools.get(poolId) || {}).name || poolId}"`);
         this.loadPoolDetailTrusted(poolId);
-        this.refreshTrustedPools();
       } catch (error) {
         console.error('Failed to add trusted pool:', error);
         this.showToast('Failed to add trusted pool', 'error');
@@ -2436,47 +2525,10 @@ class FirebasePromiseApp {
         });
         this.showToast('Removed trusted pool', 'success');
         this.loadPoolDetailTrusted(poolId);
-        this.refreshTrustedPools();
       } catch (error) {
         console.error('Failed to remove trusted pool:', error);
         this.showToast('Failed to remove trusted pool', 'error');
       }
-    }
-
-    // Aggregate the active trusted pools across every pool the user belongs to,
-    // by folding the trusted-pool-added / -removed events in each pool's activity log.
-    // Feeds the "Trusted Pools" group in the transfer destination dropdown.
-    async refreshTrustedPools() {
-      const agg = new Map();
-      const myPoolIds = new Set(this.myPools.keys());
-      await Promise.all(Array.from(this.myPools.keys()).map(async (poolId) => {
-        try {
-          const snap = await this.db.collection('pools').doc(poolId).collection('activity')
-            .orderBy('timestamp', 'asc').get();
-          const trusted = new Map();
-          snap.docs.forEach(doc => {
-            const e = doc.data();
-            if (e.type === 'trusted-pool-added' && e.trustedPoolId) {
-              trusted.set(e.trustedPoolId, { name: e.trustedPoolName || e.trustedPoolId, active: true });
-            } else if (e.type === 'trusted-pool-removed' && e.trustedPoolId) {
-              const prev = trusted.get(e.trustedPoolId);
-              if (prev) prev.active = false;
-            }
-          });
-          trusted.forEach((t, tid) => {
-            if (!t.active) return;
-            if (myPoolIds.has(tid)) return; // already listed under "My Pools"
-            const existing = agg.get(tid);
-            if (existing) { existing.sourcePoolIds.add(poolId); }
-            else { agg.set(tid, { trustedPoolId: tid, trustedPoolName: t.name, sourcePoolIds: new Set([poolId]) }); }
-          });
-        } catch (e) {
-          console.error('refreshTrustedPools: failed for', poolId, e);
-        }
-      }));
-      this.trustedPools = agg;
-      // Repopulate the transfer dropdown now that trusted pools are known.
-      this.updateUI();
     }
 
     async loadPoolDetailTrusted(poolId) {
@@ -2812,6 +2864,14 @@ class FirebasePromiseApp {
       }
       case 'trusted-pool-removed':
         return `${ico('✂️')}<strong>${who}</strong> removed trusted pool "${entry.trustedPoolId || ''}" · <em>${when}</em>`;
+      case 'transferred-to-pool': {
+        const dest = (this.myPools.get(entry.toPoolId) || {}).name || entry.toPoolId || '';
+        return `${ico('🤝')}<strong>${who}</strong> transferred${snippet} to pool "${dest}" · <em>${when}</em>`;
+      }
+      case 'received-from-pool': {
+        const src = (this.myPools.get(entry.fromPoolId) || {}).name || entry.fromPoolId || '';
+        return `${ico('📥')}<strong>${who}</strong> brought${snippet} from pool "${src}" · <em>${when}</em>`;
+      }
       default: return `${ico('📋')}<strong>${who}</strong> ${entry.type}${snippet} · <em>${when}</em>`;
     }
   }
