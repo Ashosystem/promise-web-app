@@ -72,6 +72,7 @@ class FirebasePromiseApp {
     this.promises = new Map();
     this.contacts = new Map();
     this.myPools = new Map();
+    this.trustedPools = new Map(); // trustedPoolId → { trustedPoolId, trustedPoolName, sourcePoolIds:Set }
     this.poolUnsubscribers = new Map();
     this.selectedPoolId = null;
     this.selectedPoolDetailId = null;
@@ -843,6 +844,7 @@ class FirebasePromiseApp {
           }
         });
         this.updateUI();
+        this.refreshTrustedPools();
       });
     this.unsubscribers.push(poolsUnsub);
 
@@ -2045,6 +2047,18 @@ class FirebasePromiseApp {
             });
             transferReceiver.appendChild(group);
           }
+
+          if (this.trustedPools.size > 0) {
+            const tgroup = document.createElement('optgroup');
+            tgroup.label = 'Trusted Pools';
+            Array.from(this.trustedPools.values()).forEach(t => {
+              const option = document.createElement('option');
+              option.value = `pool:${t.trustedPoolId}`;
+              option.textContent = `🤝 ${t.trustedPoolName || t.trustedPoolId}`;
+              tgroup.appendChild(option);
+            });
+            transferReceiver.appendChild(tgroup);
+          }
         }
 
       const currentPane = document.querySelector('.tab-pane.active');
@@ -2406,6 +2420,7 @@ class FirebasePromiseApp {
         this.showToast(`Added trusted pool "${trustedPoolName}"`, 'success');
         this.addActivity(`Added trusted pool "${trustedPoolName}" to "${(this.myPools.get(poolId) || {}).name || poolId}"`);
         this.loadPoolDetailTrusted(poolId);
+        this.refreshTrustedPools();
       } catch (error) {
         console.error('Failed to add trusted pool:', error);
         this.showToast('Failed to add trusted pool', 'error');
@@ -2421,10 +2436,47 @@ class FirebasePromiseApp {
         });
         this.showToast('Removed trusted pool', 'success');
         this.loadPoolDetailTrusted(poolId);
+        this.refreshTrustedPools();
       } catch (error) {
         console.error('Failed to remove trusted pool:', error);
         this.showToast('Failed to remove trusted pool', 'error');
       }
+    }
+
+    // Aggregate the active trusted pools across every pool the user belongs to,
+    // by folding the trusted-pool-added / -removed events in each pool's activity log.
+    // Feeds the "Trusted Pools" group in the transfer destination dropdown.
+    async refreshTrustedPools() {
+      const agg = new Map();
+      const myPoolIds = new Set(this.myPools.keys());
+      await Promise.all(Array.from(this.myPools.keys()).map(async (poolId) => {
+        try {
+          const snap = await this.db.collection('pools').doc(poolId).collection('activity')
+            .orderBy('timestamp', 'asc').get();
+          const trusted = new Map();
+          snap.docs.forEach(doc => {
+            const e = doc.data();
+            if (e.type === 'trusted-pool-added' && e.trustedPoolId) {
+              trusted.set(e.trustedPoolId, { name: e.trustedPoolName || e.trustedPoolId, active: true });
+            } else if (e.type === 'trusted-pool-removed' && e.trustedPoolId) {
+              const prev = trusted.get(e.trustedPoolId);
+              if (prev) prev.active = false;
+            }
+          });
+          trusted.forEach((t, tid) => {
+            if (!t.active) return;
+            if (myPoolIds.has(tid)) return; // already listed under "My Pools"
+            const existing = agg.get(tid);
+            if (existing) { existing.sourcePoolIds.add(poolId); }
+            else { agg.set(tid, { trustedPoolId: tid, trustedPoolName: t.name, sourcePoolIds: new Set([poolId]) }); }
+          });
+        } catch (e) {
+          console.error('refreshTrustedPools: failed for', poolId, e);
+        }
+      }));
+      this.trustedPools = agg;
+      // Repopulate the transfer dropdown now that trusted pools are known.
+      this.updateUI();
     }
 
     async loadPoolDetailTrusted(poolId) {
