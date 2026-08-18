@@ -78,6 +78,10 @@ class FirebasePromiseApp {
     this.poolDetailTab = 'promises';
     this.activities = [];
 
+    // My verified phone number (E.164), for phone-addressed promises. Stays
+    // null until the phone identity work sets it from the users doc.
+    this.myPhoneNumber = null;
+
     // Usernames
     this.currentUsername = null;
     this.usernames = new Map(); // email → username
@@ -125,6 +129,16 @@ class FirebasePromiseApp {
 
       // Check for Google redirect result on load
       this.checkRedirectResult();
+
+      // Claim-link entry (?claimPhone=+44...): prefill the phone sign-in with
+      // the number the voucher was reserved for and nudge towards phone auth.
+      const claimPhone = new URLSearchParams(location.search).get('claimPhone');
+      if (claimPhone) {
+        const phoneInput = document.getElementById('phoneNumber');
+        if (phoneInput && !phoneInput.value) phoneInput.value = claimPhone;
+        const phoneErrEl = document.getElementById('phoneAuthError');
+        if (phoneErrEl) phoneErrEl.textContent = 'A voucher is waiting for this number — sign in with your phone to claim it.';
+      }
 
       const googleBtn = document.getElementById('googleSignInBtn');
       if (googleBtn && !googleBtn.dataset.initialized) {
@@ -656,7 +670,7 @@ class FirebasePromiseApp {
                 // Current user is the SENDER
                 // ✅ Use their archived copy (works across all devices)
                 encryptedData = promise.contentEncryptedForSender;
-            } else if (promise.receiverEmail === this.currentUser.email) {
+            } else if (this.isCurrentReceiver(promise)) {
                 // Current user is the RECEIVER
                 encryptedData = promise.contentEncryptedForReceiver;
             } else {
@@ -720,6 +734,7 @@ class FirebasePromiseApp {
 
           await userDocRef.set({
             email: this.currentUser.email,
+            phoneNumber: this.currentUser.phoneNumber || null,
             publicKey: publicKeyBase64,
             secretKey: secretKeyBase64,
             createdAt: new Date().toISOString(),
@@ -732,6 +747,7 @@ class FirebasePromiseApp {
         // Load encryption keys
         await this.loadEncryptionKeys();
         await this.checkPendingInvites();
+        await this.claimPhonePromises();
         // Nudge Google users to set a recovery passphrase if they don't have one yet
         if (this.isGoogleUser() && this.myKeyPair) {
           const u = await this.db.collection('users').doc(this.currentUser.uid).get();
@@ -791,6 +807,38 @@ class FirebasePromiseApp {
       });
     this.unsubscribers.push(receivedPromisesUnsub);
 
+    // Promises addressed to my phone number merge into the same Map —
+    // duplicate delivery with the email listener is harmless (same doc id).
+    if (this.myPhoneNumber) {
+      console.log('Attaching phone promises listener...');
+      const phonePromisesUnsub = this.db.collection('promises')
+        .where('receiverPhone', '==', this.myPhoneNumber)
+        .onSnapshot((snapshot) => {
+          console.log('Phone promises snapshot received:', snapshot.size);
+          snapshot.docChanges().forEach((change) => {
+            const promiseData = { id: change.doc.id, ...change.doc.data() };
+            if (change.type === 'added' || change.type === 'modified') {
+              this.promises.set(promiseData.id, promiseData);
+            } else if (change.type === 'removed') {
+              this.promises.delete(promiseData.id);
+            }
+          });
+          this.updateUI();
+        });
+      this.unsubscribers.push(phonePromisesUnsub);
+
+      // Live claim: if someone reserves vouchers for my number while I'm
+      // signed in, migrate them without waiting for the next sign-in.
+      const pendingClaimUnsub = this.db.collection('pending-users').doc(this.myPhoneNumber)
+        .onSnapshot((doc) => {
+          if (doc.exists) {
+            this.migratePendingPhonePromises(this.myPhoneNumber)
+              .catch(e => console.error('Live phone claim failed:', e));
+          }
+        });
+      this.unsubscribers.push(pendingClaimUnsub);
+    }
+
     // Listen to my contacts
     console.log('Attaching contacts listener...');
     const contactsUnsub = this.db.collection('users')
@@ -800,7 +848,10 @@ class FirebasePromiseApp {
         console.log('Contacts snapshot received:', snapshot.size);
         this.contacts.clear();
         snapshot.forEach((doc) => {
-          this.contacts.set(doc.data().email, doc.data());
+          // Doc id is the contact's uid; keyed by email, falling back to
+          // phone for contacts that have no email identity.
+          const data = { id: doc.id, ...doc.data() };
+          this.contacts.set(data.email || data.phone, data);
         });
         // Fetch usernames for all contacts
         const uids = snapshot.docs.map(d => d.id);
@@ -1060,7 +1111,7 @@ class FirebasePromiseApp {
   // ===== PROMISE OPERATIONS =====
       async createPromise() {
       const content = document.getElementById('promiseContent').value.trim();
-      const receiverEmail = document.getElementById('promiseReceiver').value.trim()
+      const receiverInput = document.getElementById('promiseReceiver').value.trim()
           || document.getElementById('promiseReceiverSelect').value.trim();
       const expiration = document.getElementById('promiseExpiration').value;
       const locked = document.getElementById('promiseLock').checked;
@@ -1118,7 +1169,7 @@ class FirebasePromiseApp {
           const ri = document.getElementById('promiseReceiver');
           if (ri) {
             ri.disabled = false;
-            ri.placeholder = 'Type an email, or pick a contact below...';
+            ri.placeholder = 'Type an email or phone number, or pick a contact below...';
           }
         } catch (error) {
           console.error('Pool promise error:', error);
@@ -1129,56 +1180,40 @@ class FirebasePromiseApp {
         return;
       }
 
-      if (!receiverEmail) {
+      if (!receiverInput) {
         this.showToast('Please fill in all required fields', 'error');
-        return;
-      }
-
-      if (!this.isValidEmail(receiverEmail)) {
-        this.showToast('Please enter a valid email address for the recipient', 'error');
         return;
       }
 
       this.showLoading();
       try {
-        // Check if receiver exists
-        const userQuery = await this.db.collection('users')
-          .where('email', '==', receiverEmail)
-          .get();
+        const recipient = await this.resolveRecipient(receiverInput, { provisionIfMissing: true });
+        if (!recipient) return;
 
-        if (userQuery.empty) {
-          this.showToast('Receiver not found', 'error');
-          this.hideLoading();
-          return;
-        }
-
-        const receiverId = userQuery.docs[0].id;
+        const receiverLabel = recipient.receiverEmail || recipient.receiverPhone;
 
         // If the recipient was typed in (not an existing contact), add them to the
         // Network automatically so the user can grow their contacts from this screen.
-        if (!this.contacts.has(receiverEmail)) {
+        if (recipient.receiverId && !this.contacts.has(receiverLabel)) {
           try {
             await this.db.collection('users')
               .doc(this.currentUser.uid)
               .collection('contacts')
-              .doc(receiverId)
+              .doc(recipient.receiverId)
               .set({
-                email: receiverEmail,
+                email: recipient.receiverEmail,
+                phone: recipient.receiverPhone,
                 addedAt: new Date().toISOString()
               });
-            this.addActivity(`Contact "${receiverEmail}" added`);
+            this.addActivity(`Contact "${receiverLabel}" added`);
           } catch (e) {
             // Non-fatal — sending the promise still proceeds
             console.error('Failed to auto-add contact:', e);
           }
         }
 
-        // Fetch receiver's public key
-        const receiverUserDoc = await this.db.collection('users').doc(receiverId).get();
-        const receiverPublicKey = receiverUserDoc.data().publicKey;
-
         // ✅ Encrypt for receiver (only they can read it)
-        const encryptedForReceiver = PromiseEncryption.encrypt(content, receiverPublicKey);
+        const encryptedForReceiver = PromiseEncryption.encrypt(content, recipient.publicKey);
         // ✅ Encrypt for sender (archive - sender can read from any device)
         const encryptedForSender = PromiseEncryption.encrypt(content, this.currentUserDoc.publicKey);
 
@@ -1190,8 +1225,9 @@ class FirebasePromiseApp {
           senderEmail: this.currentUser.email,
           originalCreatorId: this.currentUser.uid,
           originalCreatorEmail: this.currentUser.email,
-          receiverId: receiverId,
-          receiverEmail: receiverEmail,
+          receiverId: recipient.receiverId,
+          receiverEmail: recipient.receiverEmail,
+          receiverPhone: recipient.receiverPhone,
           status: locked ? 'locked' : 'active',
           locked: locked,
           expiresAt: expiration ? new Date(expiration).toISOString() : null,
@@ -1205,7 +1241,7 @@ class FirebasePromiseApp {
           // Single promise: use add() for simplicity
           await this.db.collection('promises').add(promiseTemplate);
           this.showToast('Promise created successfully', 'success');
-          this.addActivity(`Promise created for ${receiverEmail}: "[encrypted]"`);
+          this.addActivity(`Promise created for ${receiverLabel}: "[encrypted]"`);
         } else {
           // Batch create multiple promises
           const batch = this.db.batch();
@@ -1215,10 +1251,13 @@ class FirebasePromiseApp {
           }
           await batch.commit();
           this.showToast(`${quantity} promises created successfully`, 'success');
-          this.addActivity(`Batch created ${quantity} promises for ${receiverEmail}`);
+          this.addActivity(`Batch created ${quantity} promises for ${receiverLabel}`);
         }
 
         document.getElementById('createPromiseForm').reset();
+
+        // Pending phone recipient: hand the sender the claim link to pass on
+        if (recipient.pending) this.sharePhoneClaimLink(recipient.receiverPhone);
       } catch (error) {
         this.showToast('Failed to create promise', 'error');
         console.error('Error:', error);
@@ -1233,17 +1272,26 @@ class FirebasePromiseApp {
         async transferPromise() {
         console.log('=== TRANSFER CALLED ===');
         const promiseId = document.getElementById('transferPromiseSelect').value;
-        const newReceiverEmail = document.getElementById('transferReceiver').value;
+        // Free-text input wins; the contacts/pools dropdown fills it (or, for
+        // pools, carries the pool: value itself while the input is disabled).
+        const transferInputEl = document.getElementById('transferReceiverInput');
+        const newReceiverRaw = (transferInputEl ? transferInputEl.value.trim() : '')
+            || document.getElementById('transferReceiver').value;
 
-        if (!promiseId || !newReceiverEmail) {
+        if (!promiseId || !newReceiverRaw) {
             this.showToast('Please select a promise and new receiver', 'error');
             return;
         }
 
         // Route to pool transfer if a pool was selected
-        if (newReceiverEmail.startsWith('pool:')) {
-            const poolId = newReceiverEmail.slice(5);
+        if (newReceiverRaw.startsWith('pool:')) {
+            const poolId = newReceiverRaw.slice(5);
             document.getElementById('transferPromiseForm').reset();
+            // Form reset doesn't undo the disable applied when the pool was picked
+            if (transferInputEl) {
+                transferInputEl.disabled = false;
+                transferInputEl.placeholder = 'Type an email or phone number, or pick a contact below...';
+            }
             await this.transferToPool(promiseId, poolId);
             return;
         }
@@ -1261,7 +1309,7 @@ class FirebasePromiseApp {
         }
 
         // Check if user is the current receiver
-        if (promise.receiverEmail !== this.currentUser.email) {
+        if (!this.isCurrentReceiver(promise)) {
             this.showToast('Only the current receiver can transfer this promise', 'error');
             return;
         }
@@ -1270,19 +1318,11 @@ class FirebasePromiseApp {
 
         try {
             // Look up new receiver
-            const userQuery = await this.db.collection('users')
-                .where('email', '==', newReceiverEmail)
-                .get();
+            const recipient = await this.resolveRecipient(newReceiverRaw, { provisionIfMissing: true });
+            if (!recipient) return;
 
-            if (userQuery.empty) {
-                this.showToast('New receiver not found', 'error');
-                this.hideLoading();
-                return;
-            }
-
-            const newReceiverId = userQuery.docs[0].id;
-            const newReceiverDoc = userQuery.docs[0].data();
-            const newReceiverPublicKey = newReceiverDoc.publicKey;
+            const newReceiverLabel = recipient.receiverEmail || recipient.receiverPhone;
+            const newReceiverPublicKey = recipient.publicKey;
 
             // ✅ DECRYPT THE CONTENT
             // Current receiver (me) decrypts with their key
@@ -1326,13 +1366,16 @@ class FirebasePromiseApp {
             // Only update the receiver's copy
             // The sender's archive stays the same (they always have it)
             const updateData = {
-                receiverId: newReceiverId,
-                receiverEmail: newReceiverEmail,
+                receiverId: recipient.receiverId,
+                receiverEmail: recipient.receiverEmail,
+                // Set (or clear) phone routing so a promise transferred away
+                // from a phone identity stops appearing in that phone's inbox.
+                receiverPhone: recipient.receiverPhone,
                 contentEncryptedForReceiver: newEncryptedForReceiver,
                 updatedAt: new Date().toISOString(),
                 transferHistory: firebase.firestore.FieldValue.arrayUnion({
-                    from: promise.receiverEmail,
-                    to: newReceiverEmail,
+                    from: promise.receiverEmail || promise.receiverPhone || '',
+                    to: newReceiverLabel,
                     timestamp: new Date().toISOString()
                 })
             };
@@ -1347,7 +1390,10 @@ class FirebasePromiseApp {
 
             document.getElementById('transferPromiseForm').reset();
             this.showToast('Promise transferred successfully', 'success');
-            this.addActivity(`Promise transferred to ${newReceiverEmail}`);
+            this.addActivity(`Promise transferred to ${newReceiverLabel}`);
+
+            // Pending phone recipient: hand the sender the claim link to pass on
+            if (recipient.pending) this.sharePhoneClaimLink(recipient.receiverPhone);
         } catch (error) {
             console.error('TRANSFER ERROR:', error);
             this.showToast('Failed to transfer promise: ' + error.message, 'error');
@@ -1432,7 +1478,7 @@ class FirebasePromiseApp {
     const promise = this.promises.get(promiseId);
     if (!promise) { this.showToast('Promise not found', 'error'); return; }
     if (promise.locked) { this.showToast('Cannot transfer locked promise', 'error'); return; }
-    if (promise.receiverEmail !== this.currentUser.email) {
+    if (!this.isCurrentReceiver(promise)) {
       this.showToast('Only the current receiver can transfer this promise', 'error');
       return;
     }
@@ -1552,8 +1598,9 @@ class FirebasePromiseApp {
     }
 
     const contactOptions = contacts.map(c => {
-      const name = this.usernames.get(c.email) ? `@${this.usernames.get(c.email)} (${c.email})` : c.email;
-      return `<option value="${c.email}">${name}</option>`;
+      const label = c.email || c.phone;
+      const name = this.usernames.get(c.email) ? `@${this.usernames.get(c.email)} (${c.email})` : label;
+      return `<option value="${label}">${name}</option>`;
     }).join('');
     const poolOptions = trustedPools.map(t =>
       `<option value="pool:${t.trustedPoolId}">🤝 ${t.trustedPoolName || t.trustedPoolId}</option>`
@@ -1662,19 +1709,18 @@ class FirebasePromiseApp {
     }
   }
 
-  async transferPoolPromise(promiseId, recipientEmail) {
+  async transferPoolPromise(promiseId, recipientRaw) {
     const promise = this.promises.get(promiseId);
     if (!promise || !promise.isPoolPromise) { this.showToast('Promise not found', 'error'); return; }
     if (!this.myKeyPair) { this.showToast('Encryption keys not loaded', 'error'); return; }
     this.showLoading();
     try {
-      const userQuery = await this.db.collection('users').where('email', '==', recipientEmail).get();
-      if (userQuery.empty) { this.showToast('Recipient not found', 'error'); this.hideLoading(); return; }
-      const recipientDoc = userQuery.docs[0];
-      const recipientPublicKey = recipientDoc.data().publicKey;
+      const recipient = await this.resolveRecipient(recipientRaw, { provisionIfMissing: true });
+      if (!recipient) return;
+      const recipientLabel = recipient.receiverEmail || recipient.receiverPhone;
       const now = new Date().toISOString();
 
-      const encryptedForRecipient = PromiseEncryption.encrypt(promise.content, recipientPublicKey);
+      const encryptedForRecipient = PromiseEncryption.encrypt(promise.content, recipient.publicKey);
       const encryptedForSender = PromiseEncryption.encrypt(promise.content, this.currentUserDoc.publicKey);
 
       const batch = this.db.batch();
@@ -1683,19 +1729,20 @@ class FirebasePromiseApp {
         senderEmail: this.currentUser.email,
         originalCreatorEmail: promise.originalCreatorEmail || promise.senderEmail,
         originalCreatorId: promise.originalCreatorId || promise.senderId,
-        receiverId: recipientDoc.id,
-        receiverEmail: recipientEmail,
+        receiverId: recipient.receiverId,
+        receiverEmail: recipient.receiverEmail,
+        receiverPhone: recipient.receiverPhone,
         contentEncryptedForReceiver: encryptedForRecipient,
         contentEncryptedForSender: encryptedForSender,
         status: 'active',
         locked: false,
         createdAt: now,
-        transferHistory: [{ from: `pool:${promise.poolId}`, to: recipientEmail, timestamp: now }],
+        transferHistory: [{ from: `pool:${promise.poolId}`, to: recipientLabel, timestamp: now }],
       });
       batch.update(this.db.collection('promises').doc(promiseId), {
         status: 'transferred',
         transferredBy: this.currentUser.email,
-        transferredTo: recipientEmail,
+        transferredTo: recipientLabel,
         updatedAt: now,
       });
       batch.set(this.db.collection('pools').doc(promise.poolId).collection('activity').doc(), {
@@ -1703,11 +1750,14 @@ class FirebasePromiseApp {
         promiseId,
         content: promise.content,
         by: this.currentUser.email,
-        to: recipientEmail,
+        to: recipientLabel,
         timestamp: now,
       });
       await batch.commit();
-      this.showToast(`Promise transferred to ${this.displayName(recipientEmail)}`, 'success');
+      this.showToast(`Promise transferred to ${this.displayName(recipientLabel)}`, 'success');
+
+      // Pending phone recipient: hand the sender the claim link to pass on
+      if (recipient.pending) this.sharePhoneClaimLink(recipient.receiverPhone);
     } catch (e) {
       console.error('Pool transfer error:', e);
       this.showToast('Failed to transfer: ' + e.message, 'error');
@@ -1724,7 +1774,7 @@ class FirebasePromiseApp {
       return;
     }
 
-    if (promise.receiverEmail !== this.currentUser.email) {
+    if (!this.isCurrentReceiver(promise)) {
       this.showToast('Only the receiver can redeem this promise', 'error');
       return;
     }
@@ -1749,25 +1799,16 @@ class FirebasePromiseApp {
 
   // ===== CONTACTS =====
     async addContact() {
-        const email = document.getElementById('contactName').value.trim();
+        const raw = document.getElementById('contactName').value.trim();
 
-        if (!email || !this.isValidEmail(email)) {
-            this.showToast('Please enter a valid email', 'error');
-            return;
-        }
-
-        // Check if email exists in users collection
-        const userQuery = await this.db.collection('users')
-            .where('email', '==', email)
-            .get();
-
-        if (userQuery.empty) {
-            this.showToast('User not found', 'error');
-            return;
-        }
+        // Contact-adds never provision accounts — a typo here must not create
+        // an account for (or email) a stranger. Only existing users resolve.
+        const recipient = await this.resolveRecipient(raw, { provisionIfMissing: false });
+        if (!recipient) return;
 
         try {
-            const contactUserId = userQuery.docs[0].id;
+            const contactUserId = recipient.receiverId;
+            const contactLabel = recipient.receiverEmail || recipient.receiverPhone;
 
             // Check if already in contacts
             const existingContact = await this.db.collection('users')
@@ -1786,20 +1827,21 @@ class FirebasePromiseApp {
                 .collection('contacts')
                 .doc(contactUserId)
                 .set({
-                    email: email,
+                    email: recipient.receiverEmail,
+                    phone: recipient.receiverPhone,
                     addedAt: new Date().toISOString()
                 });
 
             document.getElementById('addContactForm').reset();
 
             // ✅ Better message for self-contact
-            if (email === this.currentUser.email) {
+            if (contactUserId === this.currentUser.uid) {
                 this.showToast('Added yourself as contact (for self-promises)', 'success');
             } else {
                 this.showToast('Contact added successfully', 'success');
             }
 
-            this.addActivity(`Contact "${email}" added`);
+            this.addActivity(`Contact "${contactLabel}" added`);
 
         } catch (error) {
             this.showToast('Failed to add contact', 'error');
@@ -1808,22 +1850,16 @@ class FirebasePromiseApp {
     }
 
 
-  async removeContact(email) {
+  async removeContact(contactId, label) {
     try {
-      const userQuery = await this.db.collection('users')
-        .where('email', '==', email)
-        .get();
+      await this.db.collection('users')
+        .doc(this.currentUser.uid)
+        .collection('contacts')
+        .doc(contactId)
+        .delete();
 
-      if (!userQuery.empty) {
-        await this.db.collection('users')
-          .doc(this.currentUser.uid)
-          .collection('contacts')
-          .doc(userQuery.docs[0].id)
-          .delete();
-
-        this.showToast('Contact removed successfully', 'success');
-        this.addActivity(`Contact "${email}" removed`);
-      }
+      this.showToast('Contact removed successfully', 'success');
+      this.addActivity(`Contact "${label}" removed`);
     } catch (error) {
       this.showToast('Failed to remove contact', 'error');
       console.error('Error:', error);
@@ -1954,7 +1990,7 @@ class FirebasePromiseApp {
                         this.selectedPoolId = null;
                         if (receiverInput) {
                             receiverInput.disabled = false;
-                            receiverInput.placeholder = 'Type an email, or pick a contact below...';
+                            receiverInput.placeholder = 'Type an email or phone number, or pick a contact below...';
                         }
                         return;
                     }
@@ -1971,7 +2007,7 @@ class FirebasePromiseApp {
                         if (receiverInput) {
                             receiverInput.disabled = false;
                             receiverInput.value = val;
-                            receiverInput.placeholder = 'Type an email, or pick a contact below...';
+                            receiverInput.placeholder = 'Type an email or phone number, or pick a contact below...';
                         }
                     }
                 });
@@ -1994,6 +2030,27 @@ class FirebasePromiseApp {
                 transferForm.addEventListener('submit', (e) => {
                     e.preventDefault();
                     this.transferPromise();
+                });
+            }
+
+            // Transfer tab: the contacts/pools dropdown fills the typeable recipient
+            // input. Picking a pool keeps pool: routing on the select itself — the
+            // input is cleared and disabled so the pool choice can't be shadowed.
+            const transferReceiverSelect = document.getElementById('transferReceiver');
+            const transferReceiverInput = document.getElementById('transferReceiverInput');
+            if (transferReceiverSelect && transferReceiverInput) {
+                transferReceiverSelect.addEventListener('change', (e) => {
+                    const val = e.target.value;
+                    if (val.startsWith('pool:')) {
+                        const pool = this.myPools.get(val.slice(5));
+                        transferReceiverInput.value = '';
+                        transferReceiverInput.disabled = true;
+                        transferReceiverInput.placeholder = `🏊 Transferring to pool "${pool ? pool.name : val.slice(5)}"`;
+                    } else {
+                        transferReceiverInput.disabled = false;
+                        if (val) transferReceiverInput.value = val;
+                        transferReceiverInput.placeholder = 'Type an email or phone number, or pick a contact below...';
+                    }
                 });
             }
 
@@ -2055,7 +2112,7 @@ class FirebasePromiseApp {
                             <div class="preview-box">
                                 <strong>Promise:</strong> ${this.decryptPromiseContent(promise)}<br>
                                 <strong>From:</strong> ${promise.senderEmail}<br>
-                                <strong>Current Receiver:</strong> ${promise.receiverEmail}
+                                <strong>Current Receiver:</strong> ${promise.receiverEmail || promise.receiverPhone || ''}
                             </div>
                         `;
                     }
@@ -2115,7 +2172,7 @@ class FirebasePromiseApp {
 
         // Only show promises YOU received (not locked, not redeemed, not transferred)
         Array.from(this.promises.values())
-          .filter(p => p.receiverEmail === this.currentUser.email && p.status !== 'redeemed' && p.status !== 'transferred' && !p.locked)
+          .filter(p => this.isCurrentReceiver(p) && p.status !== 'redeemed' && p.status !== 'transferred' && !p.locked)
           .forEach(promise => {
             const label = this.decryptPromiseContent(promise).substring(0, 50);
             const option = document.createElement('option');
@@ -2132,9 +2189,10 @@ class FirebasePromiseApp {
 
           Array.from(this.contacts.values())
             .forEach(contact => {
+              const label = contact.email || contact.phone;
               const option = document.createElement('option');
-              option.value = contact.email;
-              option.textContent = this.usernames.get(contact.email) ? `@${this.usernames.get(contact.email)} (${contact.email})` : contact.email;
+              option.value = label;
+              option.textContent = this.usernames.get(contact.email) ? `@${this.usernames.get(contact.email)} (${contact.email})` : label;
               transferReceiver.appendChild(option);
             });
 
@@ -2192,7 +2250,7 @@ class FirebasePromiseApp {
 
           // Inbox: active promises received by me
           const inboxCount = all
-            .filter(p => p.receiverEmail === this.currentUser.email && this.isActive(p))
+            .filter(p => this.isCurrentReceiver(p) && this.isActive(p))
             .length;
 
           // Outbox: active promises I sent
@@ -2236,7 +2294,7 @@ class FirebasePromiseApp {
 
       // Inbox shows only ACTIVE received promises — redeemed/expired move to their own tabs
       const receivedPromises = Array.from(this.promises.values())
-        .filter(p => p.receiverEmail === this.currentUser.email && this.isActive(p))
+        .filter(p => this.isCurrentReceiver(p) && this.isActive(p))
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
       if (receivedPromises.length === 0) {
@@ -2298,7 +2356,7 @@ class FirebasePromiseApp {
       }
 
       container.innerHTML = redeemedPromises
-        .map(p => this.renderPromiseCard(p, p.receiverEmail === this.currentUser.email))
+        .map(p => this.renderPromiseCard(p, this.isCurrentReceiver(p)))
         .join('');
     }
 
@@ -2322,7 +2380,7 @@ class FirebasePromiseApp {
       }
 
       container.innerHTML = expiredPromises
-        .map(p => this.renderPromiseCard(p, p.receiverEmail === this.currentUser.email))
+        .map(p => this.renderPromiseCard(p, this.isCurrentReceiver(p)))
         .join('');
     }
 
@@ -2332,7 +2390,7 @@ class FirebasePromiseApp {
       const statusClass = promise.status === 'redeemed' ? 'redeemed' : (expired ? 'expired' : (promise.locked ? 'locked' : ''));
       const statusText = promise.status === 'redeemed' ? '✅ Redeemed' : (expired ? '⏰ Expired' : (promise.locked ? '🔒 Locked' : '✨ Active'));
 
-      const isReceiver = promise.receiverEmail === this.currentUser.email;
+      const isReceiver = this.isCurrentReceiver(promise);
       // Expired or redeemed promises can no longer be acted on
       const canTransfer = isReceiver && !promise.locked && promise.status !== 'redeemed' && !expired;
       const canRedeem = isReceiver && promise.status !== 'redeemed' && !expired;
@@ -2349,7 +2407,7 @@ class FirebasePromiseApp {
 
           <div class="promise-meta">
             <div><strong>Created by:</strong> ${this.displayName(this.originalCreator(promise))} <span style="font-size:11px;color:var(--color-text-secondary);" title="Promises remain redeemable against their original creator">🔐</span></div>
-            <div><strong>${isInbox ? 'From' : 'To'}:</strong> ${this.displayName(isInbox ? promise.senderEmail : promise.receiverEmail)}</div>
+            <div><strong>${isInbox ? 'From' : 'To'}:</strong> ${this.displayName(isInbox ? promise.senderEmail : (promise.receiverEmail || promise.receiverPhone))}</div>
             <div><strong>Created:</strong> ${createdDate}</div>
             ${promise.expiresAt ? `<div><strong>Expires:</strong> ${new Date(promise.expiresAt).toLocaleDateString()}</div>` : ''}
           </div>
@@ -2675,16 +2733,17 @@ class FirebasePromiseApp {
 
       container.innerHTML = Array.from(this.contacts.values())
         .map(contact => {
+          const label = contact.email || contact.phone;
           const username = this.usernames.get(contact.email);
           return `
             <div class="contact-card">
               <div class="contact-info">
                 ${username ? `<div style="font-weight:600;margin-bottom:2px;">@${username}</div>` : ''}
-                <div class="contact-email">${contact.email}</div>
+                <div class="contact-email">${label}</div>
                 <div style="font-size: 12px; color: var(--color-text-secondary);">Added ${new Date(contact.addedAt).toLocaleDateString()}</div>
               </div>
               <div class="contact-actions">
-                <button onclick="app.removeContact('${contact.email}')" class="btn btn--sm btn--secondary">Remove</button>
+                <button onclick="app.removeContact('${contact.id}', '${label}')" class="btn btn--sm btn--secondary">Remove</button>
               </div>
             </div>
           `;
@@ -2699,7 +2758,7 @@ class FirebasePromiseApp {
         if (!container) return;
 
         const receivedPromises = Array.from(this.promises.values())
-          .filter(p => p.receiverEmail === this.currentUser.email && this.isActive(p))
+          .filter(p => this.isCurrentReceiver(p) && this.isActive(p))
           .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
         container.innerHTML = receivedPromises.length === 0
@@ -2726,7 +2785,7 @@ class FirebasePromiseApp {
       .filter(p => p.senderId === this.currentUser.uid);
 
     const receivedPromises = Array.from(this.promises.values())
-      .filter(p => p.receiverEmail === this.currentUser.email);
+      .filter(p => this.isCurrentReceiver(p));
 
     const activeCount = Array.from(this.promises.values())
       .filter(p => this.isActive(p)).length;
@@ -2760,7 +2819,7 @@ class FirebasePromiseApp {
     const datalist = document.getElementById('contactOptions');
     if (datalist) {
       datalist.innerHTML = contacts
-        .map(contact => `<option value="${contact.email}"></option>`)
+        .map(contact => `<option value="${contact.email || contact.phone}"></option>`)
         .join('');
     }
 
@@ -2771,8 +2830,9 @@ class FirebasePromiseApp {
       if (contacts.length > 0) {
         html += '<optgroup label="Contacts">' +
           contacts.map(c => {
-            const name = this.usernames.get(c.email) ? `@${this.usernames.get(c.email)} (${c.email})` : c.email;
-            return `<option value="${c.email}">${name}</option>`;
+            const label = c.email || c.phone;
+            const name = this.usernames.get(c.email) ? `@${this.usernames.get(c.email)} (${c.email})` : label;
+            return `<option value="${label}">${name}</option>`;
           }).join('') +
           '</optgroup>';
       }
@@ -2791,11 +2851,359 @@ class FirebasePromiseApp {
     return re.test(email);
   }
 
+  // ===== RECIPIENT RESOLUTION =====
+  // Classify raw recipient input as an email address or an E.164 phone number.
+  // Phone parsing is deliberately minimal (no libphonenumber): strip common
+  // separators, turn a leading 00 into +, then require + followed by 7-15
+  // digits. Numbers typed without a country code are rejected with a hint.
+  normalizeRecipient(raw) {
+    const value = (raw || '').trim();
+    if (!value) return { kind: 'invalid', value: '' };
+    if (value.includes('@')) {
+      const email = value.toLowerCase();
+      if (this.isValidEmail(email)) return { kind: 'email', value: email };
+      return { kind: 'invalid', value: email, hint: 'Please enter a valid email address' };
+    }
+    let phone = value.replace(/[\s\-.()]/g, '');
+    if (phone.startsWith('00')) phone = '+' + phone.slice(2);
+    if (/^\+[1-9]\d{6,14}$/.test(phone)) return { kind: 'phone', value: phone };
+    if (/^\d+$/.test(phone)) {
+      return { kind: 'invalid', value: phone, hint: 'Include the country code, e.g. +447700900000' };
+    }
+    return { kind: 'invalid', value: value };
+  }
+
+  // Am I the current receiver of this promise? Matches on email or, for
+  // phone-addressed promises, on my verified phone number.
+  isCurrentReceiver(promise) {
+    return (!!this.currentUser.email && promise.receiverEmail === this.currentUser.email)
+      || (!!this.myPhoneNumber && promise.receiverPhone === this.myPhoneNumber);
+  }
+
+  // Resolve typed recipient input to a concrete receiver, or null (after a
+  // toast) when the caller should abort. provisionIfMissing reserves the
+  // account-provisioning path for send/transfer flows — never contact-adds.
+  async resolveRecipient(raw, { provisionIfMissing = false } = {}) {
+    const norm = this.normalizeRecipient(raw);
+    if (norm.kind === 'invalid') {
+      this.showToast(norm.hint || 'Enter a valid email address or phone number', 'error');
+      return null;
+    }
+
+    if (norm.kind === 'email') {
+      const query = await this.db.collection('users').where('email', '==', norm.value).get();
+      if (!query.empty) {
+        const doc = query.docs[0];
+        return {
+          kind: 'email',
+          receiverId: doc.id,
+          receiverEmail: norm.value,
+          receiverPhone: null,
+          publicKey: doc.data().publicKey,
+          pending: false
+        };
+      }
+      if (provisionIfMissing) {
+        const ok = confirm(`No account exists for ${norm.value}. Create one and send the voucher there? They'll get an email to set their password.`);
+        if (!ok) return null;
+        return await this.provisionEmailAccount(norm.value);
+      }
+      this.showToast('Receiver not found', 'error');
+      return null;
+    }
+
+    // Phone: sending to my own number resolves to my own account, mirroring
+    // how self-promises to my own email already work.
+    if (this.myPhoneNumber && norm.value === this.myPhoneNumber) {
+      return {
+        kind: 'phone',
+        receiverId: this.currentUser.uid,
+        receiverEmail: this.currentUser.email || null,
+        receiverPhone: norm.value,
+        publicKey: this.currentUserDoc.publicKey,
+        pending: false
+      };
+    }
+    const query = await this.db.collection('users').where('phoneNumber', '==', norm.value).get();
+    if (!query.empty) {
+      const doc = query.docs[0];
+      return {
+        kind: 'phone',
+        receiverId: doc.id,
+        receiverEmail: doc.data().email || null,
+        receiverPhone: norm.value,
+        publicKey: doc.data().publicKey,
+        pending: false
+      };
+    }
+    // Not a registered user — an earlier send may have left a placeholder.
+    const pendingDoc = await this.db.collection('pending-users').doc(norm.value).get();
+    if (pendingDoc.exists) {
+      return {
+        kind: 'phone',
+        receiverId: null,
+        receiverEmail: null,
+        receiverPhone: norm.value,
+        publicKey: pendingDoc.data().publicKey,
+        pending: true
+      };
+    }
+    if (provisionIfMissing) {
+      const ok = confirm(`No account exists for ${norm.value}. Reserve the voucher for that number? You'll get a link to share so they can claim it by signing in with their phone.`);
+      if (!ok) return null;
+      return await this.provisionPhonePlaceholder(norm.value);
+    }
+    this.showToast('Receiver not found', 'error');
+    return null;
+  }
+
+  // ===== ACCOUNT PROVISIONING (send-to-anyone) =====
+  // Secondary Firebase app, so creating the recipient's account doesn't sign
+  // the sender out — auth state is per-app. Lazy singleton.
+  getProvisioningApp() {
+    if (!this._provisioningApp) {
+      this._provisioningApp = firebase.initializeApp(firebase.app().options, 'provisioning');
+    }
+    return this._provisioningApp;
+  }
+
+  // One-time password for the provisional account. Never stored anywhere —
+  // the recipient takes ownership via the password-reset email.
+  generateThrowawayPassword() {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    return nacl.util.encodeBase64(bytes);
+  }
+
+  // Create a real Firebase Auth account + users doc for an email address that
+  // has no account yet, so a voucher can be encrypted to it immediately.
+  // Runs before any promise write, so a failed provision never half-sends.
+  // Returns a resolver-shaped recipient, or null (after a toast) on failure.
+  async provisionEmailAccount(email) {
+    const secApp = this.getProvisioningApp();
+    const secAuth = secApp.auth();
+    try {
+      // Never persist the provisional session on this device.
+      await secAuth.setPersistence(firebase.auth.Auth.Persistence.NONE);
+
+      let cred;
+      try {
+        cred = await secAuth.createUserWithEmailAndPassword(email, this.generateThrowawayPassword());
+      } catch (error) {
+        if (error.code === 'auth/email-already-in-use') {
+          this.showToast(`An account for ${email} already exists but couldn't be looked up. Ask them to sign in once, then send again.`, 'error');
+        } else {
+          this.showToast(`Could not create an account for ${email}: ${error.message}`, 'error');
+        }
+        return null;
+      }
+
+      // Keypair for the new account. The plaintext secretKey in Firestore
+      // matches the legacy key model — loadEncryptionKeys picks it up on
+      // their first sign-in and re-encrypts it under their new password.
+      const keyPair = PromiseEncryption.generateKeyPair();
+      const publicKey = nacl.util.encodeBase64(keyPair.publicKey);
+      const secretKey = nacl.util.encodeBase64(keyPair.secretKey);
+      const now = new Date().toISOString();
+      try {
+        // Written via the secondary app's Firestore: the write is authored by
+        // the NEW uid, which is what owner-only create rules require.
+        await secApp.firestore().collection('users').doc(cred.user.uid).set({
+          email: email,
+          publicKey: publicKey,
+          secretKey: secretKey,
+          provisional: true,
+          invitedByEmail: this.currentUser.email || null,
+          createdAt: now,
+          updatedAt: now
+        });
+      } catch (error) {
+        // Compensate: don't leave an Auth user with no keys behind.
+        console.error('Provisioning doc write failed, deleting auth user:', error);
+        try { await cred.user.delete(); } catch (e) { console.error('Compensating delete failed:', e); }
+        this.showToast('Could not set up the new account (permissions?). Nothing was sent.', 'error');
+        return null;
+      }
+
+      // Phase-1 notification: the password-reset email doubles as the invite.
+      try {
+        await secAuth.sendPasswordResetEmail(email);
+      } catch (error) {
+        console.warn('Password-reset email failed (non-fatal):', error);
+        this.showToast(`Account created, but the invite email failed to send. Ask ${email} to use "Forgot password" when they first sign in.`, 'info');
+      }
+
+      return {
+        kind: 'email',
+        receiverId: cred.user.uid,
+        receiverEmail: email,
+        receiverPhone: null,
+        publicKey: publicKey,
+        pending: false
+      };
+    } finally {
+      // Never stay signed in as the provisional user on the secondary app.
+      try { await secAuth.signOut(); } catch (e) { /* non-fatal */ }
+    }
+  }
+
+  // Client-side Firebase can't pre-create phone-auth accounts or send SMS, so
+  // an unknown phone gets a pending-users placeholder keypair instead. The
+  // real account migrates (re-encrypts) the promises on first sign-in.
+  async provisionPhonePlaceholder(phone) {
+    const keyPair = PromiseEncryption.generateKeyPair();
+    const publicKey = nacl.util.encodeBase64(keyPair.publicKey);
+    const secretKey = nacl.util.encodeBase64(keyPair.secretKey);
+    try {
+      await this.db.collection('pending-users').doc(phone).set({
+        phone: phone,
+        publicKey: publicKey,
+        secretKey: secretKey,
+        invitedByEmail: this.currentUser.email || null,
+        createdAt: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Pending placeholder write failed:', error);
+      this.showToast('Could not reserve the voucher for that number (permissions?). Nothing was sent.', 'error');
+      return null;
+    }
+    return {
+      kind: 'phone',
+      receiverId: null,
+      receiverEmail: null,
+      receiverPhone: phone,
+      publicKey: publicKey,
+      pending: true
+    };
+  }
+
+  // Public URL of the app for share links. Inside the Capacitor wrapper the
+  // page origin is capacitor:// or file://, which nobody else can open — fall
+  // back to the hosted deploy (the Pages workflow publishes www/ there).
+  getAppUrl() {
+    const HOSTED_URL = 'https://ashosystem.github.io/promise-web-app/';
+    if (/^(capacitor|file|ionic):/.test(location.protocol)) return HOSTED_URL;
+    return location.origin + location.pathname;
+  }
+
+  // After sending to a pending phone recipient: the app can't text them, so
+  // hand the sender a claim link to pass on (share sheet / SMS / clipboard).
+  sharePhoneClaimLink(phone) {
+    const link = `${this.getAppUrl()}?claimPhone=${encodeURIComponent(phone)}`;
+    const message = `I've sent you a voucher on Promise Voucher Network. Sign in with your phone number to claim it: ${link}`;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000';
+    modal.innerHTML = `
+      <div style="background:var(--bg-card,#1e2a3a);border-radius:12px;padding:24px;max-width:400px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.4)">
+        <h3 style="margin:0 0 12px;color:var(--text-primary,#e2e8f0)">Voucher reserved for ${phone}</h3>
+        <p style="margin:0 0 16px;font-size:0.9em;color:var(--text-secondary,#94a3b8)">The app can't text them automatically — share this link so they can claim the voucher by signing in with their phone number.</p>
+        <input readonly id="claimLinkField" value="${link}" style="width:100%;margin-bottom:16px;padding:8px;border-radius:6px;border:1px solid var(--border,#334155);background:var(--bg-input,#0f172a);color:var(--text-primary,#e2e8f0);font-size:12px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${navigator.share ? '<button id="claimShareBtn" class="btn btn--primary" style="flex:1">Share…</button>' : ''}
+          <a href="sms:${phone}?&body=${encodeURIComponent(message)}" class="btn btn--secondary" style="flex:1;text-align:center;text-decoration:none">Text them</a>
+          <button id="claimCopyBtn" class="btn btn--secondary" style="flex:1">Copy link</button>
+        </div>
+        <button id="claimCloseBtn" class="btn btn--secondary btn--full-width" style="margin-top:8px">Done</button>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    const shareBtn = document.getElementById('claimShareBtn');
+    if (shareBtn) {
+      shareBtn.onclick = () => {
+        navigator.share({ title: 'Promise Voucher', text: message }).catch(() => {});
+      };
+    }
+    document.getElementById('claimCopyBtn').onclick = () => {
+      const field = document.getElementById('claimLinkField');
+      field.select();
+      if (navigator.clipboard) navigator.clipboard.writeText(link).catch(() => {});
+      else document.execCommand('copy');
+      this.showToast('Link copied', 'success');
+    };
+    document.getElementById('claimCloseBtn').onclick = () => document.body.removeChild(modal);
+  }
+
+  // Runs on every sign-in: establish my phone identity, backfill the users
+  // doc so senders can find this account by number, then migrate anything
+  // reserved under pending-users/{myPhone}.
+  async claimPhonePromises() {
+    try {
+      const phone = this.currentUser.phoneNumber
+        || (this.currentUserDoc && this.currentUserDoc.phoneNumber)
+        || null;
+      if (!phone) return;
+      this.myPhoneNumber = phone;
+
+      if (!this.currentUserDoc || !this.currentUserDoc.phoneNumber) {
+        await this.db.collection('users').doc(this.currentUser.uid).update({
+          phoneNumber: phone,
+          updatedAt: new Date().toISOString()
+        });
+        if (this.currentUserDoc) this.currentUserDoc.phoneNumber = phone;
+      }
+
+      await this.migratePendingPhonePromises(phone);
+    } catch (error) {
+      console.error('Error claiming phone promises:', error);
+    }
+  }
+
+  // Migrate promises addressed to a pending phone placeholder onto my real
+  // account: decrypt with the placeholder key, re-encrypt for my own key.
+  // Migrate, don't adopt — the placeholder keypair dies here, so anyone who
+  // saw the pending doc can't read promises sent after the claim.
+  async migratePendingPhonePromises(phone) {
+    const pendingRef = this.db.collection('pending-users').doc(phone);
+    const pendingDoc = await pendingRef.get();
+    if (!pendingDoc.exists) return;
+
+    if (!this.myKeyPair || !this.myKeyPair.secretKey) {
+      // Keys unavailable on this device — leave the pending doc for a sign-in that has them.
+      console.warn('Pending phone promises found but keys not loaded; skipping claim');
+      return;
+    }
+
+    const pendingSecretKey = nacl.util.decodeBase64(pendingDoc.data().secretKey);
+    const myPublicKey = nacl.util.encodeBase64(this.myKeyPair.publicKey);
+
+    const snap = await this.db.collection('promises').where('receiverPhone', '==', phone).get();
+    const batch = this.db.batch();
+    let claimed = 0;
+    let failed = 0;
+    snap.docs.forEach(doc => {
+      const p = doc.data();
+      if (p.receiverId != null) return; // already owned by a real account
+      let plain;
+      try {
+        plain = PromiseEncryption.decrypt(p.contentEncryptedForReceiver, pendingSecretKey);
+      } catch (e) {
+        console.error('Could not decrypt pending promise', doc.id, e);
+        failed++;
+        return;
+      }
+      batch.update(doc.ref, {
+        receiverId: this.currentUser.uid,
+        receiverEmail: this.currentUser.email || null,
+        contentEncryptedForReceiver: PromiseEncryption.encrypt(plain, myPublicKey),
+        updatedAt: new Date().toISOString()
+      });
+      claimed++;
+    });
+    // Keep the placeholder if anything failed to migrate, so a later sign-in
+    // can retry; otherwise it has served its purpose.
+    if (failed === 0) batch.delete(pendingRef);
+    await batch.commit();
+    if (claimed > 0) {
+      this.showToast(`${claimed} voucher(s) claimed — they're in your inbox`, 'success');
+    }
+  }
+
   // ===== PROMISE STATE HELPERS =====
   // Does this promise belong to me (as sender or current receiver)?
   isMine(promise) {
     return promise.senderId === this.currentUser.uid
-      || promise.receiverEmail === this.currentUser.email;
+      || this.isCurrentReceiver(promise);
   }
 
   // Past its expiry date and never redeemed

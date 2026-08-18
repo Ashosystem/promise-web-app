@@ -307,12 +307,12 @@
 
                               <div class="form-group">
                                   <label class="form-label" for="promiseReceiver">Send to *</label>
-                                  <input type="email" id="promiseReceiver" class="form-control" list="contactOptions" placeholder="Type an email, or pick a contact below..." autocomplete="off" required>
+                                  <input type="text" id="promiseReceiver" class="form-control" list="contactOptions" placeholder="Type an email or phone number, or pick a contact below..." autocomplete="off" required>
                                   <datalist id="contactOptions"></datalist>
                                   <select id="promiseReceiverSelect" class="form-control promise-receiver-select">
                                       <option value="">— or choose an existing contact —</option>
                                   </select>
-                                  <small class="form-hint">Pick an existing contact, or type a new email — new recipients are added to your Network automatically.</small>
+                                  <small class="form-hint">Pick an existing contact, or type an email or phone number (with country code, e.g. +44 7700 900000) — new recipients are added to your Network automatically.</small>
                               </div>
 
                               <div class="form-row">
@@ -353,8 +353,9 @@
                             </div>
 
                             <div class="form-group">
-                              <label for="transferReceiver" class="form-label">Transfer To</label>
-                              <select id="transferReceiver" class="form-control" required>
+                              <label for="transferReceiverInput" class="form-label">Transfer To</label>
+                              <input type="text" id="transferReceiverInput" class="form-control" placeholder="Type an email or phone number, or pick a contact below..." autocomplete="off">
+                              <select id="transferReceiver" class="form-control">
                                 <option value="">-- Select a contact --</option>
                               </select>
                             </div>
