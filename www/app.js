@@ -2850,7 +2850,11 @@ class FirebasePromiseApp {
           pending: false
         };
       }
-      // Email provisioning for unknown recipients lands in a later commit.
+      if (provisionIfMissing) {
+        const ok = confirm(`No account exists for ${norm.value}. Create one and send the voucher there? They'll get an email to set their password.`);
+        if (!ok) return null;
+        return await this.provisionEmailAccount(norm.value);
+      }
       this.showToast('Receiver not found', 'error');
       return null;
     }
@@ -2882,6 +2886,96 @@ class FirebasePromiseApp {
     // Pending-user placeholders for unknown phones land in a later commit.
     this.showToast('Receiver not found', 'error');
     return null;
+  }
+
+  // ===== ACCOUNT PROVISIONING (send-to-anyone) =====
+  // Secondary Firebase app, so creating the recipient's account doesn't sign
+  // the sender out — auth state is per-app. Lazy singleton.
+  getProvisioningApp() {
+    if (!this._provisioningApp) {
+      this._provisioningApp = firebase.initializeApp(firebase.app().options, 'provisioning');
+    }
+    return this._provisioningApp;
+  }
+
+  // One-time password for the provisional account. Never stored anywhere —
+  // the recipient takes ownership via the password-reset email.
+  generateThrowawayPassword() {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    return nacl.util.encodeBase64(bytes);
+  }
+
+  // Create a real Firebase Auth account + users doc for an email address that
+  // has no account yet, so a voucher can be encrypted to it immediately.
+  // Runs before any promise write, so a failed provision never half-sends.
+  // Returns a resolver-shaped recipient, or null (after a toast) on failure.
+  async provisionEmailAccount(email) {
+    const secApp = this.getProvisioningApp();
+    const secAuth = secApp.auth();
+    try {
+      // Never persist the provisional session on this device.
+      await secAuth.setPersistence(firebase.auth.Auth.Persistence.NONE);
+
+      let cred;
+      try {
+        cred = await secAuth.createUserWithEmailAndPassword(email, this.generateThrowawayPassword());
+      } catch (error) {
+        if (error.code === 'auth/email-already-in-use') {
+          this.showToast(`An account for ${email} already exists but couldn't be looked up. Ask them to sign in once, then send again.`, 'error');
+        } else {
+          this.showToast(`Could not create an account for ${email}: ${error.message}`, 'error');
+        }
+        return null;
+      }
+
+      // Keypair for the new account. The plaintext secretKey in Firestore
+      // matches the legacy key model — loadEncryptionKeys picks it up on
+      // their first sign-in and re-encrypts it under their new password.
+      const keyPair = PromiseEncryption.generateKeyPair();
+      const publicKey = nacl.util.encodeBase64(keyPair.publicKey);
+      const secretKey = nacl.util.encodeBase64(keyPair.secretKey);
+      const now = new Date().toISOString();
+      try {
+        // Written via the secondary app's Firestore: the write is authored by
+        // the NEW uid, which is what owner-only create rules require.
+        await secApp.firestore().collection('users').doc(cred.user.uid).set({
+          email: email,
+          publicKey: publicKey,
+          secretKey: secretKey,
+          provisional: true,
+          invitedByEmail: this.currentUser.email || null,
+          createdAt: now,
+          updatedAt: now
+        });
+      } catch (error) {
+        // Compensate: don't leave an Auth user with no keys behind.
+        console.error('Provisioning doc write failed, deleting auth user:', error);
+        try { await cred.user.delete(); } catch (e) { console.error('Compensating delete failed:', e); }
+        this.showToast('Could not set up the new account (permissions?). Nothing was sent.', 'error');
+        return null;
+      }
+
+      // Phase-1 notification: the password-reset email doubles as the invite.
+      try {
+        await secAuth.sendPasswordResetEmail(email);
+      } catch (error) {
+        console.warn('Password-reset email failed (non-fatal):', error);
+        this.showToast(`Account created, but the invite email failed to send. Ask ${email} to use "Forgot password" when they first sign in.`, 'info');
+      }
+
+      return {
+        kind: 'email',
+        receiverId: cred.user.uid,
+        receiverEmail: email,
+        receiverPhone: null,
+        publicKey: publicKey,
+        pending: false
+      };
+    } finally {
+      // Never stay signed in as the provisional user on the secondary app.
+      try { await secAuth.signOut(); } catch (e) { /* non-fatal */ }
+    }
   }
 
   // ===== PROMISE STATE HELPERS =====
