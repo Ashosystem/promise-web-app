@@ -130,6 +130,16 @@ class FirebasePromiseApp {
       // Check for Google redirect result on load
       this.checkRedirectResult();
 
+      // Claim-link entry (?claimPhone=+44...): prefill the phone sign-in with
+      // the number the voucher was reserved for and nudge towards phone auth.
+      const claimPhone = new URLSearchParams(location.search).get('claimPhone');
+      if (claimPhone) {
+        const phoneInput = document.getElementById('phoneNumber');
+        if (phoneInput && !phoneInput.value) phoneInput.value = claimPhone;
+        const phoneErrEl = document.getElementById('phoneAuthError');
+        if (phoneErrEl) phoneErrEl.textContent = 'A voucher is waiting for this number — sign in with your phone to claim it.';
+      }
+
       const googleBtn = document.getElementById('googleSignInBtn');
       if (googleBtn && !googleBtn.dataset.initialized) {
         googleBtn.addEventListener('click', () => this.signInWithGoogle());
@@ -724,6 +734,7 @@ class FirebasePromiseApp {
 
           await userDocRef.set({
             email: this.currentUser.email,
+            phoneNumber: this.currentUser.phoneNumber || null,
             publicKey: publicKeyBase64,
             secretKey: secretKeyBase64,
             createdAt: new Date().toISOString(),
@@ -736,6 +747,7 @@ class FirebasePromiseApp {
         // Load encryption keys
         await this.loadEncryptionKeys();
         await this.checkPendingInvites();
+        await this.claimPhonePromises();
         // Nudge Google users to set a recovery passphrase if they don't have one yet
         if (this.isGoogleUser() && this.myKeyPair) {
           const u = await this.db.collection('users').doc(this.currentUser.uid).get();
@@ -794,6 +806,38 @@ class FirebasePromiseApp {
         this.updateUI();
       });
     this.unsubscribers.push(receivedPromisesUnsub);
+
+    // Promises addressed to my phone number merge into the same Map —
+    // duplicate delivery with the email listener is harmless (same doc id).
+    if (this.myPhoneNumber) {
+      console.log('Attaching phone promises listener...');
+      const phonePromisesUnsub = this.db.collection('promises')
+        .where('receiverPhone', '==', this.myPhoneNumber)
+        .onSnapshot((snapshot) => {
+          console.log('Phone promises snapshot received:', snapshot.size);
+          snapshot.docChanges().forEach((change) => {
+            const promiseData = { id: change.doc.id, ...change.doc.data() };
+            if (change.type === 'added' || change.type === 'modified') {
+              this.promises.set(promiseData.id, promiseData);
+            } else if (change.type === 'removed') {
+              this.promises.delete(promiseData.id);
+            }
+          });
+          this.updateUI();
+        });
+      this.unsubscribers.push(phonePromisesUnsub);
+
+      // Live claim: if someone reserves vouchers for my number while I'm
+      // signed in, migrate them without waiting for the next sign-in.
+      const pendingClaimUnsub = this.db.collection('pending-users').doc(this.myPhoneNumber)
+        .onSnapshot((doc) => {
+          if (doc.exists) {
+            this.migratePendingPhonePromises(this.myPhoneNumber)
+              .catch(e => console.error('Live phone claim failed:', e));
+          }
+        });
+      this.unsubscribers.push(pendingClaimUnsub);
+    }
 
     // Listen to my contacts
     console.log('Attaching contacts listener...');
@@ -1211,6 +1255,9 @@ class FirebasePromiseApp {
         }
 
         document.getElementById('createPromiseForm').reset();
+
+        // Pending phone recipient: hand the sender the claim link to pass on
+        if (recipient.pending) this.sharePhoneClaimLink(recipient.receiverPhone);
       } catch (error) {
         this.showToast('Failed to create promise', 'error');
         console.error('Error:', error);
@@ -1344,6 +1391,9 @@ class FirebasePromiseApp {
             document.getElementById('transferPromiseForm').reset();
             this.showToast('Promise transferred successfully', 'success');
             this.addActivity(`Promise transferred to ${newReceiverLabel}`);
+
+            // Pending phone recipient: hand the sender the claim link to pass on
+            if (recipient.pending) this.sharePhoneClaimLink(recipient.receiverPhone);
         } catch (error) {
             console.error('TRANSFER ERROR:', error);
             this.showToast('Failed to transfer promise: ' + error.message, 'error');
@@ -1705,6 +1755,9 @@ class FirebasePromiseApp {
       });
       await batch.commit();
       this.showToast(`Promise transferred to ${this.displayName(recipientLabel)}`, 'success');
+
+      // Pending phone recipient: hand the sender the claim link to pass on
+      if (recipient.pending) this.sharePhoneClaimLink(recipient.receiverPhone);
     } catch (e) {
       console.error('Pool transfer error:', e);
       this.showToast('Failed to transfer: ' + e.message, 'error');
@@ -2883,7 +2936,23 @@ class FirebasePromiseApp {
         pending: false
       };
     }
-    // Pending-user placeholders for unknown phones land in a later commit.
+    // Not a registered user — an earlier send may have left a placeholder.
+    const pendingDoc = await this.db.collection('pending-users').doc(norm.value).get();
+    if (pendingDoc.exists) {
+      return {
+        kind: 'phone',
+        receiverId: null,
+        receiverEmail: null,
+        receiverPhone: norm.value,
+        publicKey: pendingDoc.data().publicKey,
+        pending: true
+      };
+    }
+    if (provisionIfMissing) {
+      const ok = confirm(`No account exists for ${norm.value}. Reserve the voucher for that number? You'll get a link to share so they can claim it by signing in with their phone.`);
+      if (!ok) return null;
+      return await this.provisionPhonePlaceholder(norm.value);
+    }
     this.showToast('Receiver not found', 'error');
     return null;
   }
@@ -2975,6 +3044,158 @@ class FirebasePromiseApp {
     } finally {
       // Never stay signed in as the provisional user on the secondary app.
       try { await secAuth.signOut(); } catch (e) { /* non-fatal */ }
+    }
+  }
+
+  // Client-side Firebase can't pre-create phone-auth accounts or send SMS, so
+  // an unknown phone gets a pending-users placeholder keypair instead. The
+  // real account migrates (re-encrypts) the promises on first sign-in.
+  async provisionPhonePlaceholder(phone) {
+    const keyPair = PromiseEncryption.generateKeyPair();
+    const publicKey = nacl.util.encodeBase64(keyPair.publicKey);
+    const secretKey = nacl.util.encodeBase64(keyPair.secretKey);
+    try {
+      await this.db.collection('pending-users').doc(phone).set({
+        phone: phone,
+        publicKey: publicKey,
+        secretKey: secretKey,
+        invitedByEmail: this.currentUser.email || null,
+        createdAt: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Pending placeholder write failed:', error);
+      this.showToast('Could not reserve the voucher for that number (permissions?). Nothing was sent.', 'error');
+      return null;
+    }
+    return {
+      kind: 'phone',
+      receiverId: null,
+      receiverEmail: null,
+      receiverPhone: phone,
+      publicKey: publicKey,
+      pending: true
+    };
+  }
+
+  // Public URL of the app for share links. Inside the Capacitor wrapper the
+  // page origin is capacitor:// or file://, which nobody else can open — fall
+  // back to the hosted deploy (the Pages workflow publishes www/ there).
+  getAppUrl() {
+    const HOSTED_URL = 'https://ashosystem.github.io/promise-web-app/';
+    if (/^(capacitor|file|ionic):/.test(location.protocol)) return HOSTED_URL;
+    return location.origin + location.pathname;
+  }
+
+  // After sending to a pending phone recipient: the app can't text them, so
+  // hand the sender a claim link to pass on (share sheet / SMS / clipboard).
+  sharePhoneClaimLink(phone) {
+    const link = `${this.getAppUrl()}?claimPhone=${encodeURIComponent(phone)}`;
+    const message = `I've sent you a voucher on Promise Voucher Network. Sign in with your phone number to claim it: ${link}`;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:1000';
+    modal.innerHTML = `
+      <div style="background:var(--bg-card,#1e2a3a);border-radius:12px;padding:24px;max-width:400px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,0.4)">
+        <h3 style="margin:0 0 12px;color:var(--text-primary,#e2e8f0)">Voucher reserved for ${phone}</h3>
+        <p style="margin:0 0 16px;font-size:0.9em;color:var(--text-secondary,#94a3b8)">The app can't text them automatically — share this link so they can claim the voucher by signing in with their phone number.</p>
+        <input readonly id="claimLinkField" value="${link}" style="width:100%;margin-bottom:16px;padding:8px;border-radius:6px;border:1px solid var(--border,#334155);background:var(--bg-input,#0f172a);color:var(--text-primary,#e2e8f0);font-size:12px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          ${navigator.share ? '<button id="claimShareBtn" class="btn btn--primary" style="flex:1">Share…</button>' : ''}
+          <a href="sms:${phone}?&body=${encodeURIComponent(message)}" class="btn btn--secondary" style="flex:1;text-align:center;text-decoration:none">Text them</a>
+          <button id="claimCopyBtn" class="btn btn--secondary" style="flex:1">Copy link</button>
+        </div>
+        <button id="claimCloseBtn" class="btn btn--secondary btn--full-width" style="margin-top:8px">Done</button>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    const shareBtn = document.getElementById('claimShareBtn');
+    if (shareBtn) {
+      shareBtn.onclick = () => {
+        navigator.share({ title: 'Promise Voucher', text: message }).catch(() => {});
+      };
+    }
+    document.getElementById('claimCopyBtn').onclick = () => {
+      const field = document.getElementById('claimLinkField');
+      field.select();
+      if (navigator.clipboard) navigator.clipboard.writeText(link).catch(() => {});
+      else document.execCommand('copy');
+      this.showToast('Link copied', 'success');
+    };
+    document.getElementById('claimCloseBtn').onclick = () => document.body.removeChild(modal);
+  }
+
+  // Runs on every sign-in: establish my phone identity, backfill the users
+  // doc so senders can find this account by number, then migrate anything
+  // reserved under pending-users/{myPhone}.
+  async claimPhonePromises() {
+    try {
+      const phone = this.currentUser.phoneNumber
+        || (this.currentUserDoc && this.currentUserDoc.phoneNumber)
+        || null;
+      if (!phone) return;
+      this.myPhoneNumber = phone;
+
+      if (!this.currentUserDoc || !this.currentUserDoc.phoneNumber) {
+        await this.db.collection('users').doc(this.currentUser.uid).update({
+          phoneNumber: phone,
+          updatedAt: new Date().toISOString()
+        });
+        if (this.currentUserDoc) this.currentUserDoc.phoneNumber = phone;
+      }
+
+      await this.migratePendingPhonePromises(phone);
+    } catch (error) {
+      console.error('Error claiming phone promises:', error);
+    }
+  }
+
+  // Migrate promises addressed to a pending phone placeholder onto my real
+  // account: decrypt with the placeholder key, re-encrypt for my own key.
+  // Migrate, don't adopt — the placeholder keypair dies here, so anyone who
+  // saw the pending doc can't read promises sent after the claim.
+  async migratePendingPhonePromises(phone) {
+    const pendingRef = this.db.collection('pending-users').doc(phone);
+    const pendingDoc = await pendingRef.get();
+    if (!pendingDoc.exists) return;
+
+    if (!this.myKeyPair || !this.myKeyPair.secretKey) {
+      // Keys unavailable on this device — leave the pending doc for a sign-in that has them.
+      console.warn('Pending phone promises found but keys not loaded; skipping claim');
+      return;
+    }
+
+    const pendingSecretKey = nacl.util.decodeBase64(pendingDoc.data().secretKey);
+    const myPublicKey = nacl.util.encodeBase64(this.myKeyPair.publicKey);
+
+    const snap = await this.db.collection('promises').where('receiverPhone', '==', phone).get();
+    const batch = this.db.batch();
+    let claimed = 0;
+    let failed = 0;
+    snap.docs.forEach(doc => {
+      const p = doc.data();
+      if (p.receiverId != null) return; // already owned by a real account
+      let plain;
+      try {
+        plain = PromiseEncryption.decrypt(p.contentEncryptedForReceiver, pendingSecretKey);
+      } catch (e) {
+        console.error('Could not decrypt pending promise', doc.id, e);
+        failed++;
+        return;
+      }
+      batch.update(doc.ref, {
+        receiverId: this.currentUser.uid,
+        receiverEmail: this.currentUser.email || null,
+        contentEncryptedForReceiver: PromiseEncryption.encrypt(plain, myPublicKey),
+        updatedAt: new Date().toISOString()
+      });
+      claimed++;
+    });
+    // Keep the placeholder if anything failed to migrate, so a later sign-in
+    // can retry; otherwise it has served its purpose.
+    if (failed === 0) batch.delete(pendingRef);
+    await batch.commit();
+    if (claimed > 0) {
+      this.showToast(`${claimed} voucher(s) claimed — they're in your inbox`, 'success');
     }
   }
 
