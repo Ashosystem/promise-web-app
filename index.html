@@ -2,7 +2,21 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" id="viewportMeta">
+
+  <!-- R1 Creation mode: runs before anything else so it can't be killed by a later error in app.js -->
+  <script>
+    (function () {
+      if (new URLSearchParams(location.search).get('r1') !== '1') return;
+      // Force a known, narrow layout width so all compact rules fire predictably
+      var vp = document.getElementById('viewportMeta');
+      if (vp) vp.setAttribute('content', 'width=240, initial-scale=1.0, user-scalable=no');
+      document.documentElement.classList.add('r1-mode');
+      document.addEventListener('DOMContentLoaded', function () {
+        document.body.classList.add('r1-mode');
+      });
+    })();
+  </script>
 
   <!-- Firebase SDK v8 -->
   <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
