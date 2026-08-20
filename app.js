@@ -3399,3 +3399,145 @@ window.addEventListener('message', (e) => {
     }, 300);
   }
 });
+
+// ===== R1 ON-SCREEN KEYBOARD + ORIENTATION =====
+// Only active inside the R1 Creation (html.r1-mode). Provides a DOM keyboard
+// (native R1 keyboard is unreliable / breaks landscape) and responds to
+// orientation messages posted by the wrapper's accelerometer.
+(function () {
+  if (!document.documentElement.classList.contains('r1-mode')) return;
+
+  /* ---------- Orientation (driven by the wrapper's accelerometer) ---------- */
+  const viewportMeta = document.getElementById('viewportMeta');
+  window.addEventListener('message', (e) => {
+    if (!e.data || e.data.type !== 'r1-orientation') return;
+    const landscape = !!e.data.landscape;
+    document.body.classList.toggle('landscape', landscape);
+    if (viewportMeta) {
+      viewportMeta.setAttribute('content',
+        'width=' + (landscape ? 282 : 240) + ', initial-scale=1.0, user-scalable=no');
+    }
+  });
+
+  /* ---------- DOM keyboard ---------- */
+  const letters = [
+    ['q','w','e','r','t','y','u','i','o','p'],
+    ['a','s','d','f','g','h','j','k','l'],
+    ['z','x','c','v','b','n','m']
+  ];
+  const symbols = [
+    ['1','2','3','4','5','6','7','8','9','0'],
+    ['-','/',':',';','(',')','$','&','@','"'],
+    ['.',',','?','!','\'']
+  ];
+  let shifted = false, symMode = false, targetEl = null;
+
+  const kb = document.createElement('div');
+  kb.id = 'r1-keyboard';
+  document.body.appendChild(kb);
+
+  function build() {
+    const src = symMode ? symbols : letters;
+    let html = '';
+    src.forEach((row, i) => {
+      html += '<div class="r1kb-row">';
+      if (i === 2) html += '<button class="r1kb-key wide" data-act="shift">' + (symMode ? '.,?' : '⇧') + '</button>';
+      row.forEach(k => {
+        const label = (!symMode && shifted) ? k.toUpperCase() : k;
+        html += '<button class="r1kb-key" data-k="' + k.replace(/"/g, '&quot;') + '">' + label.replace(/"/g, '&quot;') + '</button>';
+      });
+      if (i === 2) html += '<button class="r1kb-key wide" data-act="back">⌫</button>';
+      html += '</div>';
+    });
+    html += '<div class="r1kb-row">'
+      + '<button class="r1kb-key wide" data-act="sym">' + (symMode ? 'abc' : '?123') + '</button>'
+      + '<button class="r1kb-key space" data-act="space">space</button>'
+      + '<button class="r1kb-key wide action" data-act="enter">↵</button>'
+      + '<button class="r1kb-key wide" data-act="hide">▼</button>'
+      + '</div>';
+    kb.innerHTML = html;
+  }
+  build();
+
+  function isEditable(el) {
+    return el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
+  }
+  function current() { const el = targetEl || document.activeElement; return isEditable(el) ? el : null; }
+  function fireInput(el) { el.dispatchEvent(new Event('input', { bubbles: true })); }
+
+  function typeChar(ch) {
+    const el = current(); if (!el) return;
+    const s = el.selectionStart ?? el.value.length;
+    const e = el.selectionEnd ?? s;
+    el.value = el.value.slice(0, s) + ch + el.value.slice(e);
+    el.selectionStart = el.selectionEnd = s + ch.length;
+    fireInput(el);
+  }
+  function backspace() {
+    const el = current(); if (!el) return;
+    const s = el.selectionStart ?? el.value.length;
+    const e = el.selectionEnd ?? s;
+    if (s !== e) { el.value = el.value.slice(0, s) + el.value.slice(e); el.selectionStart = el.selectionEnd = s; }
+    else if (s > 0) { el.value = el.value.slice(0, s - 1) + el.value.slice(s); el.selectionStart = el.selectionEnd = s - 1; }
+    fireInput(el);
+  }
+  function showKb() { document.body.classList.add('r1kb-open'); }
+  function hideKb() { document.body.classList.remove('r1kb-open'); }
+
+  function handleKey(e) {
+    const key = e.target.closest('.r1kb-key'); if (!key) return;
+    e.preventDefault();
+    const act = key.dataset.act, k = key.dataset.k;
+    if (k != null) {
+      typeChar((!symMode && shifted) ? k.toUpperCase() : k);
+      if (shifted) { shifted = false; build(); }
+      return;
+    }
+    switch (act) {
+      case 'shift': shifted = !shifted; build(); break;
+      case 'sym': symMode = !symMode; shifted = false; build(); break;
+      case 'back': backspace(); break;
+      case 'space': typeChar(' '); break;
+      case 'enter': {
+        const el = current();
+        if (el && el.tagName === 'TEXTAREA') typeChar('\n');
+        else { hideKb(); if (el) el.blur(); }
+        break;
+      }
+      case 'hide': { const el = current(); hideKb(); if (el) el.blur(); break; }
+    }
+  }
+
+  kb.addEventListener('mousedown', e => e.preventDefault()); // don't steal focus
+  kb.addEventListener('touchstart', (e) => {
+    const key = e.target.closest('.r1kb-key');
+    if (key) { e.preventDefault(); key.classList.add('pressed'); setTimeout(() => key.classList.remove('pressed'), 120); }
+  }, { passive: false });
+  kb.addEventListener('touchend', handleKey); // primary (R1 touch)
+  kb.addEventListener('click', handleKey);    // fallback (desktop)
+
+  // Suppress the native keyboard on every editable field (must be set before focus)
+  function suppressNative(el) {
+    if (!isEditable(el)) return;
+    if (el.getAttribute('inputmode') !== 'none') el.setAttribute('inputmode', 'none');
+  }
+  document.querySelectorAll('input, textarea').forEach(suppressNative);
+  new MutationObserver((muts) => {
+    muts.forEach(m => m.addedNodes && m.addedNodes.forEach(n => {
+      if (n.nodeType !== 1) return;
+      if (isEditable(n)) suppressNative(n);
+      if (n.querySelectorAll) n.querySelectorAll('input, textarea').forEach(suppressNative);
+    }));
+  }).observe(document.body, { childList: true, subtree: true });
+
+  document.addEventListener('focusin', (e) => {
+    if (!isEditable(e.target)) return;
+    targetEl = e.target;
+    suppressNative(e.target);
+    showKb();
+    setTimeout(() => { try { e.target.scrollIntoView({ block: 'center' }); } catch (_) {} }, 60);
+  });
+  document.addEventListener('focusout', () => {
+    setTimeout(() => { if (!isEditable(document.activeElement)) hideKb(); }, 120);
+  });
+})();

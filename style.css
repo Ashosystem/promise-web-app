@@ -1973,3 +1973,33 @@ select.form-control {
 .r1-mode .promise-card { padding: 8px; margin-bottom: 6px; }
 .r1-mode .promise-card h4 { font-size: 12px; }
 .r1-mode .promise-card p { font-size: 10px; }
+
+/* ===== R1 ON-SCREEN KEYBOARD ===== */
+#r1-keyboard { display: none; }
+.r1-mode.r1kb-open #r1-keyboard {
+  display: flex; flex-direction: column; gap: 2px;
+  position: fixed; left: 0; right: 0; bottom: 0;
+  padding: 3px; background: #0d0d0f; z-index: 100000;
+  box-shadow: 0 -4px 10px rgba(0,0,0,0.5);
+}
+.r1kb-row { display: flex; gap: 2px; justify-content: center; height: 26px; }
+.r1kb-key {
+  flex: 1; min-width: 0; padding: 0;
+  background: #2a2a2e; border: 1px solid #555; border-bottom: 2px solid #444;
+  color: #fff; border-radius: 4px; font-size: 12px; font-weight: 500;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: manipulation; user-select: none; -webkit-user-select: none;
+}
+.r1kb-key.pressed, .r1kb-key:active { background: #666; transform: scale(0.92); }
+.r1kb-key.wide   { flex: 1.5; font-size: 11px; }
+.r1kb-key.space  { flex: 4; font-size: 10px; }
+.r1kb-key.action { background: #3a6abf; border-color: #2a4a9f; }
+
+/* Keep the focused field clear of the keyboard */
+.r1-mode.r1kb-open .tab-content,
+.r1-mode.r1kb-open .modal-content,
+.r1-mode.r1kb-open .modal-body { padding-bottom: 122px !important; }
+
+/* ===== R1 LANDSCAPE ===== */
+.r1-mode.landscape .sidebar-nav { justify-content: flex-start; }
+.r1-mode.landscape .stats-grid { grid-template-columns: 1fr 1fr 1fr 1fr; }
