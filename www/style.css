@@ -1926,42 +1926,48 @@ select.form-control {
    The wrapper Creation loads: https://ashosystem.github.io/promise-web-app/?r1=1
 */
 
-/* Compact sidebar → icon-only top bar */
-body.r1-mode .app-sidebar { padding: 2px 0; border-bottom: 1px solid var(--color-border); }
-body.r1-mode .sidebar-nav { flex-direction: row; padding: 0 4px; gap: 2px; overflow-x: auto; scrollbar-width: none; }
-body.r1-mode .sidebar-nav::-webkit-scrollbar { display: none; }
-body.r1-mode .nav-item { padding: 4px 6px; min-width: 0; flex-direction: column; gap: 0; border-radius: 6px; }
-body.r1-mode .nav-item span:not(.nav-icon):not(.badge) { display: none; }
-body.r1-mode .nav-item .nav-label { display: none; }
-body.r1-mode .nav-icon { font-size: 16px; line-height: 1; }
-body.r1-mode .nav-icon img { width: 16px !important; height: 16px !important; }
-body.r1-mode .badge { font-size: 8px; min-width: 12px; height: 12px; padding: 0 2px; }
+/* Selectors use bare .r1-mode (not body.r1-mode) so they match whether the
+   class lands on <html> or <body>. !important on structural hides so they beat
+   the max-width:768px mobile media query regardless of source order. */
 
-/* Hide footer (user email, logout, attribution) */
-body.r1-mode .sidebar-footer { display: none; }
-body.r1-mode .sidebar-header { display: none; }
+/* Sidebar → thin icon-only top bar */
+.r1-mode .app-sidebar { padding: 2px 0 !important; border-bottom: 1px solid var(--color-border); max-height: none; }
+.r1-mode .sidebar-nav { flex-direction: row !important; padding: 0 4px !important; gap: 2px !important; overflow-x: auto; scrollbar-width: none; }
+.r1-mode .sidebar-nav::-webkit-scrollbar { display: none; }
+.r1-mode .nav-item { padding: 4px 5px !important; min-width: 0 !important; flex-direction: column; gap: 0 !important; border-radius: 6px; white-space: nowrap; }
+/* Hide text labels — keep only the icon and the numeric badge */
+.r1-mode .nav-item > span:not(.nav-icon):not(.badge) { display: none !important; }
+.r1-mode .nav-item .nav-label { display: none !important; }
+.r1-mode .nav-icon { font-size: 18px !important; line-height: 1; }
+.r1-mode .nav-icon img { width: 18px !important; height: 18px !important; }
+.r1-mode .badge { position: absolute; top: 0; right: 0; font-size: 8px; min-width: 12px; height: 12px; line-height: 12px; padding: 0 2px; }
+.r1-mode .nav-item { position: relative; }
+
+/* Hide the whole footer block (email, logout, settings, attribution) and header */
+.r1-mode .sidebar-footer { display: none !important; }
+.r1-mode .sidebar-header { display: none !important; }
 
 /* Tighter content */
-body.r1-mode .tab-content { padding: 6px 8px; }
-body.r1-mode .dashboard-header { display: none; }
-body.r1-mode .stats-grid { grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 4px; }
-body.r1-mode .stat-card { padding: 6px 8px; }
-body.r1-mode .stat-icon { font-size: 12px; }
-body.r1-mode .stat-value { font-size: 14px; }
-body.r1-mode .stat-label { font-size: 8px; }
+.r1-mode .tab-content { padding: 6px 8px !important; }
+.r1-mode .dashboard-header { display: none; }
+.r1-mode .stats-grid { grid-template-columns: 1fr 1fr !important; gap: 4px; margin-bottom: 4px; }
+.r1-mode .stat-card { padding: 6px 8px; }
+.r1-mode .stat-icon { font-size: 12px; }
+.r1-mode .stat-value { font-size: 14px; }
+.r1-mode .stat-label { font-size: 8px; }
 
 /* Compact FAB */
-body.r1-mode .fab-button { width: 36px; height: 36px; bottom: 8px; right: 8px; font-size: 14px; }
+.r1-mode .fab-button { width: 40px !important; height: 40px !important; bottom: 8px !important; right: 8px !important; font-size: 16px; }
 
 /* Tighter modals */
-body.r1-mode .modal-content { padding: 10px; margin: 4px; max-height: 240px; overflow-y: auto; }
-body.r1-mode .form-group { margin-bottom: 6px; }
-body.r1-mode .form-control { padding: 5px 7px; font-size: 12px; }
-body.r1-mode .modal-header { padding-bottom: 6px; margin-bottom: 6px; }
-body.r1-mode .modal-header h3 { font-size: 14px; }
-body.r1-mode .btn { padding: 5px 10px; font-size: 11px; }
+.r1-mode .modal-content { padding: 10px; margin: 4px; max-height: 250px; overflow-y: auto; }
+.r1-mode .form-group { margin-bottom: 6px; }
+.r1-mode .form-control { padding: 5px 7px; font-size: 12px; }
+.r1-mode .modal-header { padding-bottom: 6px; margin-bottom: 6px; }
+.r1-mode .modal-header h3 { font-size: 14px; }
+.r1-mode .btn { padding: 5px 10px; font-size: 11px; }
 
 /* Promise cards compact */
-body.r1-mode .promise-card { padding: 8px; margin-bottom: 6px; }
-body.r1-mode .promise-card h4 { font-size: 12px; }
-body.r1-mode .promise-card p { font-size: 10px; }
+.r1-mode .promise-card { padding: 8px; margin-bottom: 6px; }
+.r1-mode .promise-card h4 { font-size: 12px; }
+.r1-mode .promise-card p { font-size: 10px; }
