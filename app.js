@@ -3459,8 +3459,12 @@ window.addEventListener('message', (e) => {
   }
   build();
 
+  const NON_TEXT_INPUT = /^(checkbox|radio|range|file|color|button|submit|reset|image|hidden)$/i;
   function isEditable(el) {
-    return el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT');
+    if (!el) return false;
+    if (el.tagName === 'TEXTAREA') return true;
+    if (el.tagName === 'INPUT') return !NON_TEXT_INPUT.test(el.type || 'text');
+    return false;
   }
   function current() { const el = targetEl || document.activeElement; return isEditable(el) ? el : null; }
   function fireInput(el) { el.dispatchEvent(new Event('input', { bubbles: true })); }
@@ -3516,10 +3520,20 @@ window.addEventListener('message', (e) => {
   kb.addEventListener('touchend', handleKey); // primary (R1 touch)
   kb.addEventListener('click', handleKey);    // fallback (desktop)
 
-  // Suppress the native keyboard on every editable field (must be set before focus)
+  // Suppress the native keyboard on every editable field. inputmode="none" is
+  // NOT respected by the R1 WebView, so the reliable lever is `readonly`: it
+  // blocks the native keyboard on tap while still allowing programmatic value +
+  // selection changes (which is how our DOM keyboard writes into the field).
+  // Must be applied before the field is focused.
   function suppressNative(el) {
     if (!isEditable(el)) return;
+    if (!el.hasAttribute('readonly')) {
+      el.setAttribute('readonly', '');
+      el.dataset.r1kbReadonly = '1'; // mark ours, so we don't fight app-set readonly
+    }
     if (el.getAttribute('inputmode') !== 'none') el.setAttribute('inputmode', 'none');
+    el.setAttribute('autocomplete', 'off');
+    el.setAttribute('spellcheck', 'false');
   }
   document.querySelectorAll('input, textarea').forEach(suppressNative);
   new MutationObserver((muts) => {
@@ -3530,14 +3544,25 @@ window.addEventListener('message', (e) => {
     }));
   }).observe(document.body, { childList: true, subtree: true });
 
-  document.addEventListener('focusin', (e) => {
-    if (!isEditable(e.target)) return;
-    targetEl = e.target;
-    suppressNative(e.target);
+  function openFor(el) {
+    if (!isEditable(el)) return;
+    targetEl = el;
+    suppressNative(el);
+    try { el.focus(); } catch (_) {}
     showKb();
-    setTimeout(() => { try { e.target.scrollIntoView({ block: 'center' }); } catch (_) {} }, 60);
+    setTimeout(() => { try { el.scrollIntoView({ block: 'center' }); } catch (_) {} }, 60);
+  }
+  document.addEventListener('focusin', (e) => { if (isEditable(e.target)) openFor(e.target); });
+  // Tap fallback — readonly inputs may not always emit focusin on R1.
+  document.addEventListener('touchend', (e) => {
+    const el = e.target.closest && e.target.closest('input, textarea');
+    if (el && isEditable(el)) openFor(el);
+  });
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest && e.target.closest('input, textarea');
+    if (el && isEditable(el)) openFor(el);
   });
   document.addEventListener('focusout', () => {
-    setTimeout(() => { if (!isEditable(document.activeElement)) hideKb(); }, 120);
+    setTimeout(() => { if (!isEditable(document.activeElement)) hideKb(); }, 150);
   });
 })();
