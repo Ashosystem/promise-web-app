@@ -1921,142 +1921,47 @@ select.form-control {
   }
 }
 
-/* ===== R1 CREATION MODE (240px screen) ===== */
-@media (max-width: 260px) {
-  /* Sidebar becomes ultra-compact icon-only top bar */
-  .app-sidebar {
-    padding: 2px 0;
-    border-bottom: 1px solid var(--color-border);
-  }
+/* ===== R1 CREATION MODE =====
+   Applied when body has .r1-mode class (JS sets this when ?r1=1 URL param present)
+   The wrapper Creation loads: https://ashosystem.github.io/promise-web-app/?r1=1
+*/
 
-  .sidebar-nav {
-    flex-direction: row;
-    padding: 0 4px;
-    gap: 2px;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
+/* Compact sidebar → icon-only top bar */
+body.r1-mode .app-sidebar { padding: 2px 0; border-bottom: 1px solid var(--color-border); }
+body.r1-mode .sidebar-nav { flex-direction: row; padding: 0 4px; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+body.r1-mode .sidebar-nav::-webkit-scrollbar { display: none; }
+body.r1-mode .nav-item { padding: 4px 6px; min-width: 0; flex-direction: column; gap: 0; border-radius: 6px; }
+body.r1-mode .nav-item span:not(.nav-icon):not(.badge) { display: none; }
+body.r1-mode .nav-item .nav-label { display: none; }
+body.r1-mode .nav-icon { font-size: 16px; line-height: 1; }
+body.r1-mode .nav-icon img { width: 16px !important; height: 16px !important; }
+body.r1-mode .badge { font-size: 8px; min-width: 12px; height: 12px; padding: 0 2px; }
 
-  .sidebar-nav::-webkit-scrollbar { display: none; }
+/* Hide footer (user email, logout, attribution) */
+body.r1-mode .sidebar-footer { display: none; }
+body.r1-mode .sidebar-header { display: none; }
 
-  .nav-item {
-    padding: 4px 6px;
-    min-width: 0;
-    flex-direction: column;
-    gap: 0;
-    font-size: 0; /* hide label text */
-    border-radius: 6px;
-  }
+/* Tighter content */
+body.r1-mode .tab-content { padding: 6px 8px; }
+body.r1-mode .dashboard-header { display: none; }
+body.r1-mode .stats-grid { grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 4px; }
+body.r1-mode .stat-card { padding: 6px 8px; }
+body.r1-mode .stat-icon { font-size: 12px; }
+body.r1-mode .stat-value { font-size: 14px; }
+body.r1-mode .stat-label { font-size: 8px; }
 
-  .nav-item span:not(.nav-icon):not(.badge) {
-    display: none;
-  }
+/* Compact FAB */
+body.r1-mode .fab-button { width: 36px; height: 36px; bottom: 8px; right: 8px; font-size: 14px; }
 
-  .nav-item .nav-label {
-    display: none;
-  }
+/* Tighter modals */
+body.r1-mode .modal-content { padding: 10px; margin: 4px; max-height: 240px; overflow-y: auto; }
+body.r1-mode .form-group { margin-bottom: 6px; }
+body.r1-mode .form-control { padding: 5px 7px; font-size: 12px; }
+body.r1-mode .modal-header { padding-bottom: 6px; margin-bottom: 6px; }
+body.r1-mode .modal-header h3 { font-size: 14px; }
+body.r1-mode .btn { padding: 5px 10px; font-size: 11px; }
 
-  .nav-icon {
-    font-size: 16px;
-    line-height: 1;
-  }
-
-  .badge {
-    font-size: 8px;
-    min-width: 12px;
-    height: 12px;
-    padding: 0 2px;
-    top: -4px;
-    right: -2px;
-  }
-
-  /* Hide sidebar footer (user card, attribution, logout) */
-  .sidebar-footer {
-    display: none;
-  }
-
-  /* Main content tighter */
-  .tab-content {
-    padding: 6px 8px;
-  }
-
-  .dashboard-header {
-    display: none;
-  }
-
-  .stats-grid {
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    margin-bottom: 6px;
-  }
-
-  .stat-card {
-    padding: 8px;
-  }
-
-  .stat-icon {
-    font-size: 14px;
-  }
-
-  .stat-value {
-    font-size: 16px;
-  }
-
-  .stat-label {
-    font-size: 8px;
-  }
-
-  /* FAB smaller and higher to avoid overlap */
-  .fab-button {
-    width: 36px;
-    height: 36px;
-    bottom: 8px;
-    right: 8px;
-    font-size: 16px;
-  }
-
-  /* Modal/dialog tighter */
-  .modal-content {
-    padding: 12px;
-    margin: 4px;
-    max-height: 260px;
-  }
-
-  .form-group {
-    margin-bottom: 8px;
-  }
-
-  .form-control {
-    padding: 6px 8px;
-    font-size: 12px;
-  }
-
-  /* Voice button injected by wrapper */
-  #r1-voice-btn {
-    position: fixed;
-    bottom: 8px;
-    left: 8px;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: var(--color-primary, #2563eb);
-    color: #fff;
-    border: none;
-    font-size: 16px;
-    cursor: pointer;
-    z-index: 9999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  #r1-voice-btn.recording {
-    background: #dc2626;
-    animation: pulse 1s infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.1); }
-  }
-}
+/* Promise cards compact */
+body.r1-mode .promise-card { padding: 8px; margin-bottom: 6px; }
+body.r1-mode .promise-card h4 { font-size: 12px; }
+body.r1-mode .promise-card p { font-size: 10px; }

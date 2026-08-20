@@ -3399,3 +3399,10 @@ window.addEventListener('message', (e) => {
     }, 300);
   }
 });
+
+// ===== R1 MODE =====
+// When loaded via r1-promise wrapper with ?r1=1, apply compact layout
+if (new URLSearchParams(window.location.search).get('r1') === '1') {
+  document.documentElement.classList.add('r1-mode');
+  document.body.classList.add('r1-mode');
+}
