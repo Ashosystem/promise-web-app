@@ -1920,3 +1920,143 @@ select.form-control {
     font-size: var(--font-size-2xl);
   }
 }
+
+/* ===== R1 CREATION MODE (240px screen) ===== */
+@media (max-width: 260px) {
+  /* Sidebar becomes ultra-compact icon-only top bar */
+  .app-sidebar {
+    padding: 2px 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .sidebar-nav {
+    flex-direction: row;
+    padding: 0 4px;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .sidebar-nav::-webkit-scrollbar { display: none; }
+
+  .nav-item {
+    padding: 4px 6px;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0;
+    font-size: 0; /* hide label text */
+    border-radius: 6px;
+  }
+
+  .nav-item span:not(.nav-icon):not(.badge) {
+    display: none;
+  }
+
+  .nav-item .nav-label {
+    display: none;
+  }
+
+  .nav-icon {
+    font-size: 16px;
+    line-height: 1;
+  }
+
+  .badge {
+    font-size: 8px;
+    min-width: 12px;
+    height: 12px;
+    padding: 0 2px;
+    top: -4px;
+    right: -2px;
+  }
+
+  /* Hide sidebar footer (user card, attribution, logout) */
+  .sidebar-footer {
+    display: none;
+  }
+
+  /* Main content tighter */
+  .tab-content {
+    padding: 6px 8px;
+  }
+
+  .dashboard-header {
+    display: none;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+
+  .stat-card {
+    padding: 8px;
+  }
+
+  .stat-icon {
+    font-size: 14px;
+  }
+
+  .stat-value {
+    font-size: 16px;
+  }
+
+  .stat-label {
+    font-size: 8px;
+  }
+
+  /* FAB smaller and higher to avoid overlap */
+  .fab-button {
+    width: 36px;
+    height: 36px;
+    bottom: 8px;
+    right: 8px;
+    font-size: 16px;
+  }
+
+  /* Modal/dialog tighter */
+  .modal-content {
+    padding: 12px;
+    margin: 4px;
+    max-height: 260px;
+  }
+
+  .form-group {
+    margin-bottom: 8px;
+  }
+
+  .form-control {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  /* Voice button injected by wrapper */
+  #r1-voice-btn {
+    position: fixed;
+    bottom: 8px;
+    left: 8px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--color-primary, #2563eb);
+    color: #fff;
+    border: none;
+    font-size: 16px;
+    cursor: pointer;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #r1-voice-btn.recording {
+    background: #dc2626;
+    animation: pulse 1s infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+  }
+}

@@ -3361,3 +3361,41 @@ document.addEventListener('DOMContentLoaded', () => {
     console.error('Failed to initialize app:', error);
   }
 });
+
+// ===== R1 VOICE BRIDGE =====
+// Receives voice transcripts from the wrapper Creation via postMessage
+// and fills in the active text input or opens the create promise modal
+window.addEventListener('message', (e) => {
+  if (!e.data || e.data.type !== 'r1-voice-transcript') return;
+  const text = e.data.text;
+  if (!text) return;
+
+  // Find the focused input first, otherwise target the promise description field
+  const focused = document.activeElement;
+  if (focused && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA') && focused.id !== 'searchInput') {
+    focused.value = focused.value + text;
+    focused.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
+
+  // If create modal is open, fill in description
+  const descField = document.getElementById('promiseDescription') || document.getElementById('newPromiseText');
+  if (descField && descField.closest('.modal')?.style.display !== 'none') {
+    descField.value = descField.value + text;
+    descField.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
+
+  // Otherwise open the FAB modal and fill it
+  const fab = document.getElementById('createPromiseFAB');
+  if (fab) {
+    fab.click();
+    setTimeout(() => {
+      const field = document.getElementById('promiseDescription') || document.getElementById('newPromiseText');
+      if (field) {
+        field.value = text;
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    }, 300);
+  }
+});
