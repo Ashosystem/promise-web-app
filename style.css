@@ -1934,7 +1934,9 @@ select.form-control {
 .r1-mode .app-sidebar { padding: 2px 0 !important; border-bottom: 1px solid var(--color-border); max-height: none; }
 .r1-mode .sidebar-nav { flex-direction: row !important; padding: 0 4px !important; gap: 2px !important; overflow-x: auto; scrollbar-width: none; }
 .r1-mode .sidebar-nav::-webkit-scrollbar { display: none; }
-.r1-mode .nav-item { padding: 4px 5px !important; min-width: 0 !important; flex-direction: column; gap: 0 !important; border-radius: 6px; white-space: nowrap; }
+.r1-mode .nav-item { padding: 4px 7px !important; min-width: 0 !important; flex-direction: column; gap: 0 !important; border-radius: 0; white-space: nowrap; }
+/* Thin vertical separators between menu buttons */
+.r1-mode .nav-item:not(:last-child) { border-right: 1px solid var(--color-border); }
 /* Hide text labels — keep only the icon and the numeric badge */
 .r1-mode .nav-item > span:not(.nav-icon):not(.badge) { display: none !important; }
 .r1-mode .nav-item .nav-label { display: none !important; }
