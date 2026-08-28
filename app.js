@@ -3027,7 +3027,7 @@ class FirebasePromiseApp {
 
       // Phase-1 notification: the password-reset email doubles as the invite.
       try {
-        await secAuth.sendPasswordResetEmail(email);
+        await secAuth.sendPasswordResetEmail(email, { url: this.getAppUrl() });
       } catch (error) {
         console.warn('Password-reset email failed (non-fatal):', error);
         this.showToast(`Account created, but the invite email failed to send. Ask ${email} to use "Forgot password" when they first sign in.`, 'info');
