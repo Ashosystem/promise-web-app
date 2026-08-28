@@ -1920,3 +1920,86 @@ select.form-control {
     font-size: var(--font-size-2xl);
   }
 }
+
+/* ===== R1 CREATION MODE =====
+   Applied when body has .r1-mode class (JS sets this when ?r1=1 URL param present)
+   The wrapper Creation loads: https://ashosystem.github.io/promise-web-app/?r1=1
+*/
+
+/* Selectors use bare .r1-mode (not body.r1-mode) so they match whether the
+   class lands on <html> or <body>. !important on structural hides so they beat
+   the max-width:768px mobile media query regardless of source order. */
+
+/* Sidebar → thin icon-only top bar */
+.r1-mode .app-sidebar { padding: 2px 0 !important; border-bottom: 1px solid var(--color-border); max-height: none; }
+.r1-mode .sidebar-nav { flex-direction: row !important; padding: 0 4px !important; gap: 2px !important; overflow-x: auto; scrollbar-width: none; }
+.r1-mode .sidebar-nav::-webkit-scrollbar { display: none; }
+.r1-mode .nav-item { padding: 4px 7px !important; min-width: 0 !important; flex-direction: column; gap: 0 !important; border-radius: 0; white-space: nowrap; }
+/* Thin vertical separators between menu buttons */
+.r1-mode .nav-item:not(:last-child) { border-right: 1px solid var(--color-border); }
+/* Hide text labels — keep only the icon and the numeric badge */
+.r1-mode .nav-item > span:not(.nav-icon):not(.badge) { display: none !important; }
+.r1-mode .nav-item .nav-label { display: none !important; }
+.r1-mode .nav-icon { font-size: 18px !important; line-height: 1; }
+.r1-mode .nav-icon img { width: 18px !important; height: 18px !important; }
+.r1-mode .badge { position: absolute; top: 0; right: 0; font-size: 8px; min-width: 12px; height: 12px; line-height: 12px; padding: 0 2px; }
+.r1-mode .nav-item { position: relative; }
+
+/* Hide the whole footer block (email, logout, settings, attribution) and header */
+.r1-mode .sidebar-footer { display: none !important; }
+.r1-mode .sidebar-header { display: none !important; }
+
+/* Tighter content */
+.r1-mode .tab-content { padding: 6px 8px !important; }
+.r1-mode .dashboard-header { display: none; }
+.r1-mode .stats-grid { grid-template-columns: 1fr 1fr !important; gap: 4px; margin-bottom: 4px; }
+.r1-mode .stat-card { padding: 6px 8px; }
+.r1-mode .stat-icon { font-size: 12px; }
+.r1-mode .stat-value { font-size: 14px; }
+.r1-mode .stat-label { font-size: 8px; }
+
+/* Compact FAB */
+.r1-mode .fab-button { width: 40px !important; height: 40px !important; bottom: 8px !important; right: 8px !important; font-size: 16px; }
+
+/* Tighter modals */
+.r1-mode .modal-content { padding: 10px; margin: 4px; max-height: 250px; overflow-y: auto; }
+.r1-mode .form-group { margin-bottom: 6px; }
+.r1-mode .form-control { padding: 5px 7px; font-size: 12px; }
+.r1-mode .modal-header { padding-bottom: 6px; margin-bottom: 6px; }
+.r1-mode .modal-header h3 { font-size: 14px; }
+.r1-mode .btn { padding: 5px 10px; font-size: 11px; }
+
+/* Promise cards compact */
+.r1-mode .promise-card { padding: 8px; margin-bottom: 6px; }
+.r1-mode .promise-card h4 { font-size: 12px; }
+.r1-mode .promise-card p { font-size: 10px; }
+
+/* ===== R1 ON-SCREEN KEYBOARD ===== */
+#r1-keyboard { display: none; }
+.r1-mode.r1kb-open #r1-keyboard {
+  display: flex; flex-direction: column; gap: 2px;
+  position: fixed; left: 0; right: 0; bottom: 0;
+  padding: 3px; background: #0d0d0f; z-index: 100000;
+  box-shadow: 0 -4px 10px rgba(0,0,0,0.5);
+}
+.r1kb-row { display: flex; gap: 2px; justify-content: center; height: 26px; }
+.r1kb-key {
+  flex: 1; min-width: 0; padding: 0;
+  background: #2a2a2e; border: 1px solid #555; border-bottom: 2px solid #444;
+  color: #fff; border-radius: 4px; font-size: 12px; font-weight: 500;
+  display: flex; align-items: center; justify-content: center;
+  touch-action: manipulation; user-select: none; -webkit-user-select: none;
+}
+.r1kb-key.pressed, .r1kb-key:active { background: #666; transform: scale(0.92); }
+.r1kb-key.wide   { flex: 1.5; font-size: 11px; }
+.r1kb-key.space  { flex: 4; font-size: 10px; }
+.r1kb-key.action { background: #3a6abf; border-color: #2a4a9f; }
+
+/* Keep the focused field clear of the keyboard */
+.r1-mode.r1kb-open .tab-content,
+.r1-mode.r1kb-open .modal-content,
+.r1-mode.r1kb-open .modal-body { padding-bottom: 122px !important; }
+
+/* ===== R1 LANDSCAPE ===== */
+.r1-mode.landscape .sidebar-nav { justify-content: flex-start; }
+.r1-mode.landscape .stats-grid { grid-template-columns: 1fr 1fr 1fr 1fr; }
